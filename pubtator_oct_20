@@ -1,0 +1,2912 @@
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(httr)
+library(jsonlite)
+library(stringr)
+library(reshape2)
+library(XML)
+options(stringsAsFactors = F)
+
+rm(list = ls())
+
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/"
+setwd(workingdir)
+
+options(stringsAsFactors = F)
+PMC2PMID <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/PMC-ids.csv")
+PMC2PMID <- PMC2PMID[,9:10]
+
+#### INPUT: Read PMC/PMID lists, select file path####
+# filepath <- "Gene2Pubmed/"
+PMID <- fread("combined.txt", 
+              header = F, col.names = "PMCID")
+
+
+
+convertedPMCID <- merge(PMID, PMC2PMID, by = "PMCID")
+
+#combines the PMID and PMCID data frames and removes duplicates
+PMID$PMID <- rep("none")
+PMIDPMCID <- rbind(convertedPMCID, PMID)
+uniquePMIDPMCID <- PMIDPMCID[!duplicated(PMIDPMCID$PMID)]
+
+pmcidfilter <- filter(uniquePMIDPMCID, uniquePMIDPMCID$PMCID != "none")
+pmcidonly <- pmcidfilter[,1]
+
+pmidfilter <- filter(uniquePMIDPMCID, uniquePMIDPMCID$PMCID != "none")
+pmidonly <- pmidfilter[,2]
+
+
+#### INPUT: Which ID list do you want to use? ####
+IDlist <- list(pmidonly)
+IDnames <- c("pmids=")
+
+####Get JSON file of annotations for PMID/PMCID list####
+# load(file = "Intermediate/uniquePMIDPMCID1212.RData")
+
+url <- "http://www.ncbi.nlm.nih.gov"
+path <- "/research/pubtator-api/publications/export/biocjson?"
+
+#next tasks: turn this into a function
+APIresults <- matrix()
+colnames(APIresults) <- "result"
+tIDvect <- vector()
+
+i=1
+j=1
+
+for (i in 1:length(IDlist)) {
+  tIDlist <- IDlist[[i]]
+  tIDname <- IDnames[i]
+  for (j in 1:length(tIDlist$PMID)) {
+    ID <- tIDlist$PMID[j]
+    tIDvect <- paste0(tIDvect, ID, sep=",")
+    test=j/100
+    if (round(test) == test) {
+      completepath <- gsub(",$", "", paste0(path, tIDname, tIDvect))
+      raw.url.result <- GET(url = url, path = completepath)
+      result.text <- content(raw.url.result, as = "text")
+      result.df <- as.data.frame(result.text)
+      colnames(result.df) <- "result"
+      splitresults <- result.df %>%
+        separate_rows(result, sep = "\n")
+      APIresults <- rbind(APIresults, splitresults)
+      print(j)
+      tIDvect <- vector()
+    } else {
+      next()
+    }
+  }
+}
+
+
+# need to send remainder of requests
+APIresults <- filter(APIresults, APIresults != "")
+save(APIresults, file = "APIresults.RData")
+
+write.table(APIresults, file="APIresults.txt",
+            sep = "\t", quote = F, row.names = F)
+
+load(file = "APIresults.RData")
+
+# APIresults <- APIresults[-c(14019, 38240, 48261, 96982, 105703, 153224, 236445, 245166,
+#                          14017, 38238, 48259, 96980, 105701, 153222, 236443, 245164, 
+#                          14005, 38226, 48247, 96968, 105689, 153210, 236431, 245152, 
+#                          14006, 38227, 48248, 96969, 105690, 153211, 236432, 245153,
+#                          14016, 38237, 48258, 96979, 105700, 153221, 236442, 245163,
+#                          14018, 38239, 48260, 96981, 105702, 153223, 236444, 245165,
+#                          14020, 38241, 48262, 96983, 105704, 153225, 236446, 245167,
+#                          14003, 38224, 48245, 96966, 105687, 153208, 236429, 245150,
+#                          14004, 38225, 48246, 96967, 105688, 153209, 236430, 245151,
+#                          14015, 38236, 48257, 96978, 105699, 153220, 236441, 245162,
+#                          14014, 38235, 48256, 96977, 105698, 153219, 236440, 245161,
+#                          14012, 38233, 48254, 96975, 105696, 153217, 236438, 245159,
+#                          14022, 38243, 48264, 96985, 105706, 153227, 236448, 245169,
+#                          14013, 38234, 48255, 96976, 105697, 153218, 236439, 245160,
+#                          14021, 38242, 48263, 96984, 105705, 153226, 236447, 245168,
+#                          14002, 38223, 48244, 96965, 105686, 153207, 236428, 245149,
+#                          14010, 38231, 48252, 96973, 105694, 153215, 236436, 245157,
+#                          14009, 38230, 48251, 96972, 105693, 153214, 236435, 245156,
+#                          14008, 38229, 48250, 96971, 105692, 153213, 236434, 245155,
+#                          14011, 38232, 48253, 96974, 105695, 153216, 236437, 245158,
+#                          14007, 38228, 48249, 96970, 105691, 153212, 236433, 245154,
+#                          1),,drop = FALSE]
+
+
+#para resolver outro erro...
+h = curl::new_handle()
+curl::handle_setopt(h, http_version = 0L)
+httr::set_config(httr::config(http_version = 0))
+
+
+#read JSON file, turn into annotations data frame
+i=1
+bioconcept <- c("gene", "disease", "chemical", "mutation", "species", "cell lines")
+annotations_df <- data.frame()
+
+for (i in 1:length(APIresults$result)){
+  JSONrawdata <- fromJSON(APIresults$result[i])
+  if (grepl("invalid literal", JSONrawdata) == TRUE){
+    print("error1")
+    next()
+  }
+  if (grepl("We do not authorize", JSONrawdata) == TRUE){
+    print("error2")
+    next()
+  }
+  JSONrawaccessions <- JSONrawdata$accessions
+  
+  pubannotations <- matrix()
+  j=1
+  for (j in 1:length(bioconcept)) {
+    t_vec <- c(JSONrawaccessions[grepl(bioconcept[j], JSONrawaccessions)])
+    t_str <- paste(t_vec, sep = ",", collapse = ",")
+    pubannotations <- c(pubannotations, t_str)
+  }
+  pubannotations <- pubannotations[-1]
+  
+  cleanannotations <- str_split_fixed(pubannotations,"@", 2)
+  j=1
+  for (j in 1:length(bioconcept)){
+    cleanannotations <- gsub(str_c(bioconcept[j], "@"), " ", cleanannotations)
+  }
+  
+  cleanannotations_df <- as.data.frame(gsub("MESH:", "", cleanannotations))
+  
+  colnames(cleanannotations_df) <- c("category", "value")
+  cleanannotations_df$category <- c("gene", "disease", "chemical", "mutation", 
+                                    "species", "cell lines")
+  
+  cleanannotations_df$PMID <- rep(JSONrawdata$'_id', 
+                                  length(cleanannotations_df$category))
+  
+  annotations_cast <- dcast(cleanannotations_df, PMID~category) 
+  annotations_df <- as.data.frame(rbind(annotations_df, annotations_cast))
+}
+
+
+save(annotations_df, file = "Annotations_12_10.RData")
+write.table(annotations_df, file="Annotations_COVID_12_10.tsv",
+            sep = "\t", quote = F, row.names = F)
+
+annotations_df$`cell lines` <- NULL
+
+# annotations_filterblkgene <- 
+#   as.data.table(annotations_df[annotations_df$gene!="",-(5)])
+# annotations_filterblkdis <- 
+#   as.data.table(annotations_filterblkgene[annotations_filterblkgene$disease!="",])
+# annotations_filterblkspec <- 
+#   as.data.table(annotations_filterblkdis[annotations_filterblkdis$species!="",])
+
+annotations_speciesmelt <- annotations_df %>%
+  separate_rows(species)
+
+
+edges <- annotations_speciesmelt
+edges <- as.data.frame(edges)
+edges$species <- as.character(edges$species)
+
+tax_ID <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tax_ID.csv")
+tax_ID <- as.data.frame(tax_ID)
+tax_ID$species <- as.character(tax_ID$species)
+
+
+annotations_taxID <- merge(annotations_speciesmelt, tax_ID, by = "species")
+annotations_taxID$current_name_virus <- NULL
+# speciesID <- c("9606", "9539", "10090")
+# speciesID <- c(".X.")
+# species_filter <- function(x) {
+#   species_filtered <- 
+#     filter(annotations_speciesmelt,grepl(x,annotations_speciesmelt$species))
+# }
+
+# annotations_filterspec <- lapply(speciesID, species_filter)
+# annotations_filterspec_hum <- annotations_filterspec[[1]]
+
+annotations_filterspec_hum <- annotations_taxID
+
+annotations_filterspec_hum <- annotations_speciesmelt
+
+### Chemical ID ####
+unique_chemicals <- unique(annotations_filterspec_hum$chemical)
+
+write.table(unique_chemicals, "teste.txt", row.names = F, col.names = F, quote = F)
+system("cat teste.txt | tr ', ' '\n' > tempfile.01 ")
+system("sed '/^$/d' tempfile.01 | sed '/-/d' > teste.txt")
+unique_chemicals <- read.delim("teste.txt", header = F)
+unique_chemicals <- as.character(unique(unique_chemicals$V1))
+
+class(unique_chemicals)
+
+chemicalID2text <- matrix()
+i=1
+URL <- "https://id.nlm.nih.gov"
+t2 <- "/mesh/"
+t3 <- ".json"
+# 
+# #make this a function, cross-reference with existing diseaseID2text list
+for (i in 1:length(unique_chemicals)) {
+  tID <- unique_chemicals[i]
+  tcompletepath <- paste0(t2, tID, t3)
+  rawurlresult <- GET(url = URL, path = tcompletepath)
+  if (rawurlresult == "") {
+    print(i)
+    next()
+  }
+  resulttext <- content(rawurlresult, as = "text")
+  print(i)
+  chemicalID2text <- rbind(chemicalID2text, resulttext)
+}
+
+head(chemicalID2text, 4)
+chemicalID2text <- chemicalID2text[-1,]
+chemicalID2text_filterblk <- str_subset(chemicalID2text, pattern = '"@id"')
+save(chemicalID2text_filterblk, file = paste0("chemicalID2text_12_10.RData"))
+
+# 
+i=1
+ID2chemical <- data.frame(ID=NA, adjuvant=NA, action=NA)
+for (i in 1:length(chemicalID2text_filterblk)) {
+  JSONrawdata <- fromJSON(chemicalID2text_filterblk[i])
+  if (grepl("SCR_Chemical", JSONrawdata$"@type" == F)) {
+    next()
+  }
+  taction <- JSONrawdata$pharmacologicalAction
+  tID <- JSONrawdata$identifier
+  tadjuvant <- JSONrawdata$label$"@value"
+  tID2chemical <- c(tID, tadjuvant, taction)
+  ID2chemical <- rbind(ID2chemical, tID2chemical)
+}
+
+#
+colnames(annotations_filterspec_hum) <- c("PMID", "ID", "disease", "gene", "mutation", "species")
+annotations_filterspec_hum$mutation <- NULL
+annotations_chemIDmelt <- annotations_filterspec_hum %>%
+  separate_rows(ID)
+
+
+annotations_cheIDvv <- merge(annotations_chemIDmelt, ID2chemical, by = "ID", all.x = TRUE)
+annotations_cheIDvv$action <- NULL
+head(annotations_cheIDvv)
+colnames(annotations_cheIDvv) <- c("IDchemical", "PMID", "disease", "gene", "species", "chemical")
+# annotations_wadjtext <- annotations_chemIDmelt
+# annotations_wadjtext <- annotations_wadjtext[,-1]
+annotations_cheIDvv_1 <- distinct(annotations_cheIDvv)
+
+####Melt other columns####
+
+annotations_dismelt <- annotations_cheIDvv_1 %>%
+  separate_rows(disease) 
+annotations_melt <- annotations_dismelt %>%
+  separate_rows(gene) 
+# annotations_melt <- annotations_melt[,-5]
+
+#arquivo com gene symbols
+load(file = "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/genesymbols.RData")
+
+#### Gene ID to Gene symbol ####
+annotations_melt$gene <- as.character(annotations_melt$gene)
+genesymbols$gene <- as.character(genesymbols$gene)
+annotations_wgenetext <- merge(annotations_melt, genesymbols, by = "gene", all.x = TRUE)
+annotations_wgenetext <- distinct(annotations_wgenetext)
+# annotations_wgenetext <- annotations_wgenetext[,-1]
+
+####MeSH ID to MeSH term ####
+###retrieves meshIDs
+annotations_wdiseases <- filter(annotations_wgenetext,
+                                grepl("D", annotations_wgenetext$disease))
+
+# annotations_wdiseases <- annotations_wgenetext
+unique_diseases <- unique(annotations_wdiseases$disease)
+
+# 
+# write.table(unique_diseases, "teste_dis.txt", row.names = F, col.names = F, quote = F)
+# system("cat teste_dis.txt | tr ', ' '\n' > tempfile.01 ")
+# system("sed '/^$/d' tempfile.01 | sed '/-/d' > teste_dis.txt")
+# unique_diseases <- read.delim("teste_dis.txt", header = F)
+# unique_diseases <- unique(unique_diseases)
+
+
+
+diseaseID2text <- matrix()
+i=1
+URL <- "https://id.nlm.nih.gov"
+t2 <- "/mesh/"
+t3 <- ".json"
+
+#make this a function, cross-reference with existing diseaseID2text list
+for (i in 1:length(unique_diseases)) {
+  tID <- unique_diseases[i]
+  tcompletepath <- paste0(t2, tID, t3)
+  rawurlresult <- GET(url = URL, path = tcompletepath)
+  if (rawurlresult == "") {
+    next()
+  }
+  resulttext <- content(rawurlresult, as = "text")
+  print(i)
+  diseaseID2text <- rbind(diseaseID2text, resulttext)
+}  
+
+head(diseaseID2text)
+
+
+diseaseID2text <- diseaseID2text[-1,]
+save(diseaseID2text, file = paste0("diseaseID2text_12_10.RData"))
+
+i=1
+ID2disease <- data.frame(ID=NA, disease=NA)
+for (i in 1:length(diseaseID2text)){
+  JSONrawdata <- fromJSON(diseaseID2text[i])
+  tID <- JSONrawdata$identifier
+  tdisease <- JSONrawdata$label$"@value"
+  tID2disease <- c(tID, tdisease)
+  ID2disease <- rbind(ID2disease, tID2disease)
+}
+ID2disease <- ID2disease[-1,]
+
+colnames(annotations_wgenetext) <- c("gene", "IDchemical", "PMID", "ID", "species", "chemical", "symbol")
+annotations_wdistext <- merge(annotations_wgenetext, ID2disease, by = "ID", all.x = TRUE)
+# annotations_wdistext <- annotations_wdistext[,-1]
+colnames(annotations_wdistext) <- c("IDdisease", "IDgene", "IDchemical", "PMID", "species", "chemical", "symbol", "disease")
+
+# write.csv(annotations_wdistext, "/home/vivischuch/pubmed_zika/pubmed_results/Gene2Pubmed_1/Edges_final_download_def2.csv", 
+#           row.names = F)
+
+
+# filtered <- annotations_wdistext[annotations_wdistext$species == tax_ID$species,]
+# head(filtered)
+
+save(annotations_wdistext, file = paste0("annotations_wdistext_12_10.RData"))
+annotations_wdistext[is.na(annotations_wdistext)] <- ""
+write_tsv(annotations_wdistext, "edges_annotations_12_10.tsv")
+write.table(annotations_wdistext, file="edges_annotations_12_10.tsv",
+            sep = "\t", quote = F, row.names = F)
+# load(file = "/home/vivischuch/pubmed_zika/pubmed_results/Gene2Pubmed_1/annotations_wdistext_def2.RData")
+# filtered <- annotations_wdistext[annotations_wdistext_2$disease == PMID4,]
+# filtered <- filtered[,-4]
+# write.csv(filtered, "Edges_final_filtered.csv",row.names = F)annotations_filterspec_hum$mutation - 
+
+# tax_ID <- fread("/home/vivischuch/pubmed_zika/pubmed_results/tax_ID.csv")
+# tax_ID <- as.data.frame(tax_ID)
+# tax_ID$species <- as.character(tax_ID$species)
+
+library(dplyr)
+
+# annotations_taxID <- inner_join(edges, tax_ID, by = "species")
+annotations_taxID <- merge(annotations_wdistext, tax_ID, by = "species")
+annotations_taxID <- distinct(annotations_taxID)
+head(annotations_taxID)
+annotations_taxID <- annotations_taxID[,c(1, 9, 2, 8, 3, 7, 4, 6, 5)]
+colnames(annotations_taxID) <- c("Idspecies", "current_name_virus", "IDdisease", "disease",
+                                 "IDgene", "symbol", "IDchemical", "chemical", "PMID")
+
+
+annotations_taxID[is.na(annotations_taxID)] <- ""
+
+write_tsv(annotations_taxID, "edges_annotations_12_10.tsv")
+write.table(annotations_taxID, file="edges_annotations_12_10.tsv",
+            sep = "\t", quote = F, row.names = F)
+
+#+++++++++++++++++
+#FIM
+
+
+unic_virus1 <- annotations_taxID
+
+# unic_virus1 <- fread("/home/vivischuch/pubmed_zika/pubmed_results/edges_annotations/edges_covid19_combined_final.tsv")
+
+lista_virus_unicos <- unic_virus1[!duplicated(unic_virus1$current_name_virus), ]
+vires_unicos <- as.data.frame(sort(lista_virus_unicos$current_name_virus))
+colnames(vires_unicos) <- c("virus_rede_COVID")
+
+write_tsv(vires_unicos, "virus_unicos_12_10.csv")
+head(vires_unicos)
+
+library(readr)
+#+++++++++++++++++
+#FIM
+library(tidyverse)
+library(data.table)
+library(httr)
+library(jsonlite)
+library(reshape2)
+library(XML)
+
+rm(list = ls())
+
+#colocar aqui o seu diretório de trabalho
+# workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/"
+# setwd(workingdir)
+
+# options(stringsAsFactors = F)
+# 
+# #+++++++++++++++
+# 
+# rm(list = ls())
+# 
+# table <- read_tsv("/home/vivischuch/pubmed_zika/pubmed_results/edges_annotations/edges_covid19_combined_final.tsv")
+# table$PMID  <- gsub("[|]","'" , table$PMID, ignore.case = TRUE)
+# table$PMID <- gsub("'None", "", table$PMID, ignore.case = TRUE)
+# 
+# 
+# table2 <- table[complete.cases(table[ , 6]),]
+# # table2 <- na.omit(table, cols="IDgene")
+# table2$vv <- paste0(table2$Idspecies,'_',table2$IDgene, '_', table2$PMID)
+# 
+# table3 <- table2[!duplicated(table2$vv), ]
+# table4 = table3[-c(153338),]
+# table4$vv <- NULL
+# table4[is.na(table4)] <- ""
+# 
+# write_tsv(table4, "/home/vivischuch/pubmed_zika/pubmed_results/edges_annotations/edges_covid19_combined_final_genes_uniq.tsv")
+# 
+# #+++++++++++
+# 
+# rm(list = ls())
+# 
+# table <- read_tsv("/home/vivischuch/pubmed_zika/pubmed_results/edges_annotations/edges_covid19_combined_final.tsv")
+# table$PMID  <- gsub("[|]","'" , table$PMID, ignore.case = TRUE)
+# table$PMID <- gsub("'None", "", table$PMID, ignore.case = TRUE)
+# 
+# 
+# table2 <- table[complete.cases(table[ , 7]),]
+# # table2 <- na.omit(table, cols="IDgene")
+# table2$vv <- paste0(table2$Idspecies,'_',table2$IDchemical, '_', table2$PMID)
+# 
+# table3 <- table2[!duplicated(table2$vv), ]
+# 
+# table4 = table3[-c(323163),]
+# table4$vv <- NULL
+# table4[is.na(table4)] <- ""
+# write_tsv(table4, "/home/vivischuch/pubmed_zika/pubmed_results/edges_annotations/edges_covid19_combined_final_chemical_uniq.tsv")
+# 
+# 
+# #++++++++++++
+# 
+# rm(list = ls())
+# 
+# table <- read_tsv("/home/vivischuch/pubmed_zika/pubmed_results/edges_annotations/edges_covid19_combined_final.tsv")
+# table$PMID  <- gsub("[|]","'" , table$PMID, ignore.case = TRUE)
+# table$PMID <- gsub("'None", "", table$PMID, ignore.case = TRUE)
+# 
+# unique_PMIDs <- unique(table$PMID)
+# 
+# table2 <- table[complete.cases(table[ , 3]),]
+# # table2 <- na.omit(table, cols="IDgene")
+# table2$vv <- paste0(table2$Idspecies,'_',table2$IDdisease, '_', table2$PMID)
+# 
+# table3 <- table2[!duplicated(table2$vv), ]
+# 
+# table4 = table3[-c(806644),]
+# table4$vv <- NULL
+# table4[is.na(table4)] <- ""
+# write_tsv(table4, "/home/vivischuch/pubmed_zika/pubmed_results/edges_annotations/edges_covid19_combined_final_disease_uniq.tsv")
+# 
+# 
+# #+++++
+
+rm(list = ls())
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/"
+setwd(workingdir)
+# rm(list = ls())
+fields <- fread("covid19_genes_surce_target_value.tsv")
+
+fields$value <- NULL
+
+fields <- fields[!apply(fields == "", 1, any), ]   
+
+sep = "///"
+cond <- fields %>% mutate(id = paste(Source,
+                                   sep = sep,
+                                   Target))
+cond$Source <- NULL
+cond$Target <- NULL
+
+splitted <- strsplit(as.character(cond$PMIDs), ",")
+
+vv <- data.frame(v1 = rep.int(cond$id, sapply(splitted, length)), v2 = unlist(splitted))
+
+vv <- vv[!duplicated(vv), ]
+
+colnames(vv) <- c("gene_association", "document")
+
+vv1 <- vv %>% 
+  select(gene_association, document) %>% 
+  group_by(gene_association) %>%
+  summarise(PMIDs = paste0(document, collapse = " | "))
+
+vv2 <- vv %>% 
+  select(gene_association, document) %>% 
+  group_by(gene_association) %>%
+  summarise(n_documents = n())
+
+vv3 <- merge(vv1, vv2)
+
+vv4 <- vv3 %>%
+  separate(gene_association, c("Source", "Target"), "///")
+
+fields <- vv4
+
+fields$Source_type <- c("virus")
+fields$target_type <- c("gene")
+
+fields_2 <- fields[which(fields[,"n_documents"] > 1),]
+
+fields_3 <- fields_2[,c(1, 5, 2, 6, 4, 3)]
+
+write_tsv(fields_3, "edges_genes_12_10.tsv")
+
+sourceX <- fields_3[,c(1,2)]
+targetX <- fields_3[,c(3,4)] 
+colnames(sourceX) <- c("x","y")
+colnames(targetX) <- c("x","y")
+nodes <- rbind(sourceX,targetX)
+#remove duplicated nodes
+nodes <- nodes[!duplicated(nodes), ]
+nodes[,"name"] = nodes[,1]
+colnames(nodes) <- c("ID","Class","Label")
+head(nodes)
+table(duplicated(nodes))
+
+nodes$current_name_virus <- nodes$ID
+tax_ID <- fread("tax_ID_fornodes.csv")
+tax_ID <- as.data.frame(tax_ID)
+tax_ID$current_name_virus <- as.character(tax_ID$current_name_virus)
+
+library(dplyr)
+
+# annotations_taxID <- inner_join(edges, tax_ID, by = "species")
+nodes_final <- merge(nodes, tax_ID, by = "current_name_virus", all.x = TRUE)
+nodes_final <- distinct(nodes_final)
+head(nodes_final)
+
+# nodes_final <- nodes_final[-1,]
+
+nodes_final$current_name_virus <- NULL
+nodes_final[is.na(nodes_final)] <- ""
+head(nodes_final)
+write_tsv(nodes_final, "nodes_genes_12_10_anotada.tsv")
+
+#
+rm(list = ls())
+
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/"
+setwd(workingdir)
+fields <- fread("covid19_doenca_surce_target_value.tsv")
+
+fields$value <- NULL
+
+fields <- fields[!apply(fields == "", 1, any), ]   
+
+sep = "///"
+cond <- fields %>% mutate(id = paste(Source,
+                                     sep = sep,
+                                     Target))
+cond$Source <- NULL
+cond$Target <- NULL
+
+splitted <- strsplit(as.character(cond$PMIDs), ",")
+
+vv <- data.frame(v1 = rep.int(cond$id, sapply(splitted, length)), v2 = unlist(splitted))
+
+vv <- vv[!duplicated(vv), ]
+
+colnames(vv) <- c("disease_association", "document")
+
+vv1 <- vv %>% 
+  select(disease_association, document) %>% 
+  group_by(disease_association) %>%
+  summarise(PMIDs = paste0(document, collapse = " | "))
+
+vv2 <- vv %>% 
+  select(disease_association, document) %>% 
+  group_by(disease_association) %>%
+  summarise(n_documents = n())
+
+vv3 <- merge(vv1, vv2)
+
+vv4 <- vv3 %>%
+  separate(disease_association, c("Source", "Target"), "///")
+
+fields <- vv4
+
+fields$Source_type <- c("virus")
+fields$target_type <- c("disease")
+
+fields_2 <- fields[which(fields[,"n_documents"] > 1),]
+
+fields_3 <- fields_2[,c(1, 5, 2, 6, 4, 3)]
+
+write_tsv(fields_3, "edges_diseases_12_10.tsv")
+
+sourceX <- fields_3[,c(1,2)]
+targetX <- fields_3[,c(3,4)] 
+colnames(sourceX) <- c("x","y")
+colnames(targetX) <- c("x","y")
+nodes <- rbind(sourceX,targetX)
+#remove duplicated nodes
+nodes <- nodes[!duplicated(nodes), ]
+nodes[,"name"] = nodes[,1]
+colnames(nodes) <- c("ID","Class","Label")
+head(nodes)
+table(duplicated(nodes))
+# write_tsv(nodes, "nodes_diseases_12_10.tsv")
+
+nodes$current_name_virus <- nodes$ID
+tax_ID <- fread("tax_ID_fornodes.csv")
+tax_ID <- as.data.frame(tax_ID)
+tax_ID$current_name_virus <- as.character(tax_ID$current_name_virus)
+
+nodes_final <- merge(nodes, tax_ID, by = "current_name_virus", all.x = TRUE)
+nodes_final <- distinct(nodes_final)
+head(nodes_final)
+
+# nodes_final <- nodes_final[-1,]
+head(nodes_final)
+
+nodes_final$current_name_virus <- NULL
+nodes_final[is.na(nodes_final)] <- ""
+head(nodes_final)
+write_tsv(nodes, "nodes_diseases_12_10.tsv")
+
+#++++++++++++++++++++++++++++++
+
+rm(list = ls())
+fields <- fread("covid19_drug_surce_target_value.tsv")
+
+fields$value <- NULL
+
+fields <- fields[!apply(fields == "", 1, any), ]   
+
+sep = "///"
+cond <- fields %>% mutate(id = paste(Source,
+                                     sep = sep,
+                                     Target))
+cond$Source <- NULL
+cond$Target <- NULL
+
+splitted <- strsplit(as.character(cond$PMIDs), ",")
+
+vv <- data.frame(v1 = rep.int(cond$id, sapply(splitted, length)), v2 = unlist(splitted))
+
+vv <- vv[!duplicated(vv), ]
+
+colnames(vv) <- c("drug_association", "document")
+
+vv1 <- vv %>% 
+  select(drug_association, document) %>% 
+  group_by(drug_association) %>%
+  summarise(PMIDs = paste0(document, collapse = " | "))
+
+vv2 <- vv %>% 
+  select(drug_association, document) %>% 
+  group_by(drug_association) %>%
+  summarise(n_documents = n())
+
+vv3 <- merge(vv1, vv2)
+
+vv4 <- vv3 %>%
+  separate(drug_association, c("Source", "Target"), "///")
+
+fields <- vv4
+
+fields$Source_type <- c("virus")
+fields$target_type <- c("drug")
+
+fields_2 <- fields[which(fields[,"n_documents"] > 1),]
+
+fields_3 <- fields_2[,c(1, 5, 2, 6, 4, 3)]
+
+write_tsv(fields_3, "edges_drugs_12_10.tsv")
+
+sourceX <- fields_3[,c(1,2)]
+targetX <- fields_3[,c(3,4)] 
+colnames(sourceX) <- c("x","y")
+colnames(targetX) <- c("x","y")
+nodes <- rbind(sourceX,targetX)
+#remove duplicated nodes
+nodes <- nodes[!duplicated(nodes), ]
+nodes[,"name"] = nodes[,1]
+colnames(nodes) <- c("ID","Class","Label")
+head(nodes)
+table(duplicated(nodes))
+# write_tsv(nodes, "nodes_diseases_12_10.tsv")
+
+nodes$current_name_virus <- nodes$ID
+tax_ID <- fread("tax_ID_fornodes.csv")
+tax_ID <- as.data.frame(tax_ID)
+tax_ID$current_name_virus <- as.character(tax_ID$current_name_virus)
+
+nodes_final <- merge(nodes, tax_ID, by = "current_name_virus", all.x = TRUE)
+nodes_final <- distinct(nodes_final)
+head(nodes_final)
+
+# nodes_final <- nodes_final[-1,]
+head(nodes_final)
+
+nodes_final$current_name_virus <- NULL
+nodes_final[is.na(nodes_final)] <- ""
+head(nodes_final)
+
+write_tsv(nodes_final, "nodes_drugs_12_10.tsv")
+
+
+# ############
+# 
+# workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/"
+# setwd(workingdir)
+
+options(stringsAsFactors = F)
+
+# drugs_mesh <- read.delim("mesh.csv", sep = '\t', header = TRUE)
+# colnames(drugs_mesh) <- c("ID")
+# drugs_mesh$clinicaltrials <- c("yes")
+# head(drugs_mesh)
+# drugs_mesh <- distinct(drugs_mesh)
+
+  
+nodes2 <- read.delim(file = "Nodes_drugs_degree_5_curada.csv", sep = '\t', header = TRUE)
+colnames(nodes2)[1] <- "ID"
+
+
+nodes1_final <- merge(nodes_final, nodes2, by = "ID", all = TRUE)
+nodes1_final1 <- merge(nodes_final, nodes2, by = "ID", all.x = TRUE)
+# nodes1_final1 <- distinct(nodes1_final1)
+# nodes1_final1[is.na(nodes1_final1)] <- ""
+
+
+nodes1_final[is.na(nodes1_final)] <- ""
+write_tsv(nodes1_final, "nodes_drugs_12_10_anotada_clinicaltrials.tsv")
+
+
+# ##########
+#filtrando as reviews
+#genes
+# ##########
+
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(httr)
+library(jsonlite)
+library(stringr)
+library(reshape2)
+library(XML)
+options(stringsAsFactors = F)
+
+rm(list = ls())
+
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/"
+setwd(workingdir)
+
+options(stringsAsFactors = F)
+
+PMID_genes <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/edges_genes_12_10.tsv")
+PMIDs <-PMID_genes[,c(4,6)]
+PMIDs$PMIDs <- gsub(' ', '', PMIDs$PMIDs)
+PMIDs$PMIDs <- as.character(PMIDs$PMIDs)
+
+vv2 <- PMIDs %>% 
+  separate_rows(PMIDs, sep = "\\|" , convert = FALSE)
+
+vv3 <- vv2[!duplicated(vv2), ]
+
+# write_tsv(vv3, "PMIDs_genes.tsv")
+
+# rm(list = ls())
+
+PMID_drugs <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/edges_drugs_12_10.tsv")
+PMIDs <-PMID_drugs[,c(4,6)]
+PMIDs$PMIDs <- gsub(' ', '', PMIDs$PMIDs)
+PMIDs$PMIDs <- as.character(PMIDs$PMIDs)
+
+vv4 <- PMIDs %>% 
+  separate_rows(PMIDs, sep = "\\|" , convert = FALSE)
+
+vv5 <- vv4[!duplicated(vv4), ]
+
+# write_tsv(vv5, "PMIDs_drugs.tsv")
+
+
+# rm(list = ls())
+
+PMID_diseases <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/edges_diseases_12_10.tsv")
+PMIDs <-PMID_diseases[,c(4,6)]
+PMIDs$PMIDs <- gsub(' ', '', PMIDs$PMIDs)
+PMIDs$PMIDs <- as.character(PMIDs$PMIDs)
+
+vv6 <- PMIDs %>% 
+  separate_rows(PMIDs, sep = "\\|" , convert = FALSE)
+
+vv7 <- vv6[!duplicated(vv6), ]
+
+# write_tsv(vv7, "PMIDs_diseases.tsv")
+
+
+vv8 <- dplyr::bind_rows(vv7, vv5)
+
+vv9 <- dplyr::bind_rows(vv8, vv3)
+
+# write_tsv(vv9, "PMIDs_all.tsv")
+
+vv9$id <- c("vv")
+vv9$target_type <- NULL
+
+vv10 <- vv9[!duplicated(vv9), ]
+vv10$id <- NULL
+
+write_tsv(vv10, "onlyPMIDs_all.tsv")
+
+
+# categorizando os PMIDs
+
+PMID_final <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final.tsv")
+PMID_final1 <-PMID_final[,c(1, 2, 4)]
+PMID_final2 <- PMID_final1[,c(3)]
+PMID_final3 <- PMID_final2[!duplicated(PMID_final2), ]
+
+library(readr)
+write_tsv(PMID_final3, "onlyPMIDs_final_types.tsv")
+
+#filtrando as reviews
+#genes
+
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(httr)
+library(jsonlite)
+library(stringr)
+library(reshape2)
+library(XML)
+library(readr)
+options(stringsAsFactors = F)
+
+rm(list = ls())
+
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/"
+setwd(workingdir)
+
+options(stringsAsFactors = F)
+
+PMID_genes <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/edges_genes_12_10_semHIV.csv")
+
+sep = "///"
+cond <- PMID_genes %>% mutate(id = paste(Source,
+                                     sep = sep,
+                                     Target))
+
+
+cond1 <- cond[,c(6, 7)]
+cond1$PMIDs <- gsub(' ', '', cond1$PMIDs)
+cond1$PMIDs <- as.character(cond1$PMIDs)
+
+vv2 <- cond1 %>% 
+  separate_rows(PMIDs, sep = "\\|" , convert = FALSE)
+
+vv3 <- vv2[!duplicated(vv2), ]
+
+# write_tsv(vv3, "PMIDs_genes.tsv")
+
+PMID_final <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final_types.tsv")
+
+PMID_total <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final.tsv")
+
+
+PMID_select <- merge(PMID_total, PMID_final, by = "TYPE", all.x = TRUE)
+PMID_select1 <- PMID_select[!duplicated(PMID_select), ]
+
+colnames(vv3) <- c("PMID", "id")
+class(vv3$PMID)
+class(PMID_select1$PMID)
+PMID_select1$PMID <- as.character(PMID_select1$PMID)
+# PMID_select1 <- PMID_select1[,c(2, 3, 5, 6, 7)]
+
+
+vv4 <- PMID_select1[match(vv3$PMID, PMID_select1$PMID),]
+vv5 <- dplyr::bind_cols(vv3, vv4)
+
+write_tsv(vv5, "PMIDs_edgesgenes_triados_articles.tsv")
+
+
+vv6 <- anti_join(vv3, PMID_select1)
+vv7 <- left_join(vv6, PMID_select1)
+write_tsv(vv7, "PMIDs_edgesgenes_articles_not_reviewed.tsv")
+
+vv5$approved[is.na(vv5$approved)] <- "I"
+
+
+filtro <- vv5[!vv5$approved == "N",]
+write_tsv(filtro, "PMIDs_edgesgenes_only_approved_articles.tsv")
+
+# recomeçar para não dar pau
+
+filtro1 <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/PMIDs_edgesgenes_only_approved_articles.tsv")
+head(filtro1)
+# filtro <- filtro [,c(1, 2, 3, 6)]
+PMC2PMID <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/PMC-ids.csv")
+# PMC2PMID <- PMC2PMID[,c(4,8,10)]
+PMC2PMID <- PMC2PMID[!duplicated(PMC2PMID), ]
+PMC2PMID <- dplyr::arrange(PMC2PMID, desc(Year)) 
+
+
+dfr <- PMC2PMID[match(filtro$PMID...1, PMC2PMID$PMID),] 
+head(dfr)
+fim <- dplyr::bind_cols(filtro, dfr)
+head(fim)
+
+fim1 <- fim[,c(2, 9, 1, 4, 19, 18, 5, 13, 17, 3, 7, 8, 10, 11)]
+fim2 <- fim1[,c(1, 3, 6, 8, 9, 10, 11, 12, 13, 14, 2)]
+
+colnames(fim2)[1] <- "edges_genes"
+colnames(fim2)[2] <- "PMID"
+colnames(fim2)[11] <- "jornal_article_curation"
+
+write_tsv(fim2, "PMIDs_edgesgenes_20_10_final.tsv")
+
+###
+
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(httr)
+library(jsonlite)
+library(stringr)
+library(reshape2)
+library(XML)
+library(readr)
+options(stringsAsFactors = F)
+
+rm(list = ls())
+
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/"
+setwd(workingdir)
+
+options(stringsAsFactors = F)
+
+filtro1 <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/PMIDs_edgesgenes_20_10_final.tsv")
+
+#pmid
+
+vv <- filtro1[,c(1, 2)]
+
+colnames(vv) <- c("gene_association", "document")
+
+vv1 <- vv %>% 
+  select(gene_association, document) %>% 
+  group_by(gene_association) %>%
+  summarise(PMIDs = paste0(document, collapse = " | "))
+
+vv2 <- vv %>% 
+  select(gene_association, document) %>% 
+  group_by(gene_association) %>%
+  summarise(n_documents = n())
+
+vv3 <- merge(vv1, vv2)
+
+vv4 <- vv3 %>%
+  separate(gene_association, c("Source", "Target"), "///")
+
+fields <- vv4
+
+fields$Source_type <- c("VIRUS")
+fields$target_type <- c("GENE")
+
+fields_2 <- fields[which(fields[,"n_documents"] > 1),]
+
+fields_4 <- fields_2[,c(1, 5, 2, 6, 4, 3)]
+
+
+# doi
+
+vv <- filtro1[,c(1, 5)]
+
+colnames(vv) <- c("gene_association", "document")
+
+vv1 <- vv %>% 
+  select(gene_association, document) %>% 
+  group_by(gene_association) %>%
+  summarise(PMIDs = paste0(document, collapse = " | "))
+
+vv2 <- vv %>% 
+  select(gene_association, document) %>% 
+  group_by(gene_association) %>%
+  summarise(n_documents = n())
+
+vv3 <- merge(vv1, vv2)
+
+vv4 <- vv3 %>%
+  separate(gene_association, c("Source", "Target"), "///")
+
+fields <- vv4
+
+fields$Source_type <- c("VIRUS")
+fields$target_type <- c("GENE")
+
+fields_2 <- fields[which(fields[,"n_documents"] > 1),]
+
+fields_3 <- fields_2[,c(3, 4)]
+
+doi <- dplyr::bind_cols(fields_4, fields_3)
+doi$n_documents...8 <- NULL
+colnames(doi)[5] <- c("n_documents")
+colnames(doi)[6] <- c("PMID")
+colnames(doi)[7] <- c("DOI")
+
+VV <- doi
+
+VV$'Source name' <- VV$Source
+VV$'Source Display Name' <- VV$Source
+VV$'Target name' <- VV$Target
+VV$'Target Display Name' <- VV$Target
+VV$Confidence <- c("100")
+VV$Source <- NULL
+VV$Target <- NULL
+VV$Documents <- VV$n_documents
+VV$n_documents <- NULL
+VV$'Document IDs' <- VV$PMID
+VV$PMID <- NULL
+VV$Relationships <- VV$DOI
+VV$DOI <- NULL
+VV$'Link ID' <- c("0")
+VV2 <- VV[,c(11, 3, 4, 1, 5, 6, 2, 7, 8, 9, 10)]
+colnames(VV2)[4] <- "Source type"
+colnames(VV2)[7] <- "Target type"
+VV2[VV2==""]<-NA
+VV2<-VV2[complete.cases(VV2),]
+
+# write_tsv(VV2, "edges_genes_12_10_filtered_doi_2020.tsv")
+write.csv(VV2,"edges_genes_12_10_filtered_doi_2020.csv", row.names=F)
+
+# write_tsv(doi, "edges_genes_12_10_filtered_doi.tsv")
+
+sourceX <- doi[,c(1,2)]
+targetX <- doi[,c(3,4)] 
+colnames(sourceX) <- c("x","y")
+colnames(targetX) <- c("x","y")
+nodes <- rbind(sourceX,targetX)
+#remove duplicated nodes
+nodes <- nodes[!duplicated(nodes), ]
+nodes[,"name"] = nodes[,1]
+colnames(nodes) <- c("ID","Class","Label")
+head(nodes)
+table(duplicated(nodes))
+
+nodes$current_name_virus <- nodes$ID
+tax_ID <- fread("tax_ID_fornodes.csv")
+tax_ID <- as.data.frame(tax_ID)
+tax_ID$current_name_virus <- as.character(tax_ID$current_name_virus)
+
+library(dplyr)
+
+# annotations_taxID <- inner_join(edges, tax_ID, by = "species")
+nodes_final <- merge(nodes, tax_ID, by = "current_name_virus", all.x = TRUE)
+nodes_final <- distinct(nodes_final)
+head(nodes_final)
+
+# nodes_final <- nodes_final[-1,]
+
+nodes_final$current_name_virus <- NULL
+nodes_final[is.na(nodes_final)] <- ""
+head(nodes_final)
+nodes_final$Label <- nodes_final$Abbreviation
+nodes_final$Label2 <- nodes_final$ID
+write_tsv(nodes_final, "nodes_genes_12_10_anotada_filtered_doi.tsv")
+
+
+#filtrando as reviews
+#drugs
+
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(httr)
+library(jsonlite)
+library(stringr)
+library(reshape2)
+library(XML)
+library(readr)
+options(stringsAsFactors = F)
+
+rm(list = ls())
+
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/"
+setwd(workingdir)
+
+options(stringsAsFactors = F)
+
+PMID_drugs <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/edges_drugs_12_10_semHIV.tsv")
+
+sep = "///"
+cond <- PMID_drugs %>% mutate(id = paste(Source,
+                                         sep = sep,
+                                         Target))
+
+
+cond1 <- cond[,c(6, 7)]
+cond1$PMIDs <- gsub(' ', '', cond1$PMIDs)
+cond1$PMIDs <- as.character(cond1$PMIDs)
+
+vv2 <- cond1 %>% 
+  separate_rows(PMIDs, sep = "\\|" , convert = FALSE)
+
+vv3 <- vv2[!duplicated(vv2), ]
+
+# write_tsv(vv3, "PMIDs_genes.tsv")
+
+PMID_final <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final_types.tsv")
+
+PMID_total <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final.tsv")
+
+
+PMID_select <- merge(PMID_total, PMID_final, by = "TYPE", all.x = TRUE)
+PMID_select1 <- PMID_select[!duplicated(PMID_select), ]
+
+colnames(vv3) <- c("PMID", "id")
+class(vv3$PMID)
+class(PMID_select1$PMID)
+PMID_select1$PMID <- as.character(PMID_select1$PMID)
+# PMID_select1 <- PMID_select1[,c(2, 3, 5, 6, 7)]
+
+
+vv4 <- PMID_select1[match(vv3$PMID, PMID_select1$PMID),]
+vv5 <- dplyr::bind_cols(vv3, vv4)
+
+write_tsv(vv5, "PMIDs_edgesdrugs_triados_articles.tsv")
+
+
+vv6 <- anti_join(vv3, PMID_select1)
+vv7 <- left_join(vv6, PMID_select1)
+write_tsv(vv7, "PMIDs_edgesdrugs_articles_not_reviewed.tsv")
+
+vv5$approved[is.na(vv5$approved)] <- "I"
+
+
+filtro <- vv5[!vv5$approved == "N",]
+write_tsv(filtro, "PMIDs_edgesdrugs_only_approved_articles.tsv")
+
+# recomeçar para não dar pau
+
+filtro1 <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/PMIDs_edgesdrugs_only_approved_articles.tsv")
+head(filtro1)
+# filtro <- filtro [,c(1, 2, 3, 6)]
+PMC2PMID <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/PMC-ids.csv")
+# PMC2PMID <- PMC2PMID[,c(4,8,10)]
+PMC2PMID <- PMC2PMID[!duplicated(PMC2PMID), ]
+PMC2PMID <- dplyr::arrange(PMC2PMID, desc(Year)) 
+
+
+dfr <- PMC2PMID[match(filtro$PMID...1, PMC2PMID$PMID),] 
+head(dfr)
+fim <- dplyr::bind_cols(filtro, dfr)
+head(fim)
+
+fim1 <- fim[,c(2, 9, 1, 4, 19, 18, 5, 13, 17, 3, 7, 8, 10, 11)]
+fim2 <- fim1[,c(1, 3, 6, 8, 9, 10, 11, 12, 13, 14, 2)]
+
+colnames(fim2)[1] <- "edges_drugs"
+colnames(fim2)[2] <- "PMID"
+colnames(fim2)[11] <- "jornal_article_curation"
+
+write_tsv(fim2, "PMIDs_edgesdrugs_20_10_final.tsv")
+
+###
+
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(httr)
+library(jsonlite)
+library(stringr)
+library(reshape2)
+library(XML)
+library(readr)
+options(stringsAsFactors = F)
+
+rm(list = ls())
+
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/"
+setwd(workingdir)
+
+options(stringsAsFactors = F)
+
+filtro1 <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/PMIDs_edgesdrugs_20_10_final.tsv")
+
+#pmid
+
+vv <- filtro1[,c(1, 2)]
+
+colnames(vv) <- c("drug_association", "document")
+
+vv1 <- vv %>% 
+  select(drug_association, document) %>% 
+  group_by(drug_association) %>%
+  summarise(PMIDs = paste0(document, collapse = " | "))
+
+vv2 <- vv %>% 
+  select(drug_association, document) %>% 
+  group_by(drug_association) %>%
+  summarise(n_documents = n())
+
+vv3 <- merge(vv1, vv2)
+
+vv4 <- vv3 %>%
+  separate(drug_association, c("Source", "Target"), "///")
+
+fields <- vv4
+
+fields$Source_type <- c("VIRUS")
+fields$target_type <- c("DRUG")
+
+fields_2 <- fields[which(fields[,"n_documents"] > 1),]
+
+fields_4 <- fields_2[,c(1, 5, 2, 6, 4, 3)]
+
+
+# doi
+
+vv <- filtro1[,c(1, 5)]
+
+colnames(vv) <- c("drug_association", "document")
+
+vv1 <- vv %>% 
+  select(drug_association, document) %>% 
+  group_by(drug_association) %>%
+  summarise(PMIDs = paste0(document, collapse = " | "))
+
+vv2 <- vv %>% 
+  select(drug_association, document) %>% 
+  group_by(drug_association) %>%
+  summarise(n_documents = n())
+
+vv3 <- merge(vv1, vv2)
+
+vv4 <- vv3 %>%
+  separate(drug_association, c("Source", "Target"), "///")
+
+fields <- vv4
+
+fields$Source_type <- c("VIRUS")
+fields$target_type <- c("DRUG")
+
+fields_2 <- fields[which(fields[,"n_documents"] > 1),]
+
+fields_3 <- fields_2[,c(3, 4)]
+
+doi <- dplyr::bind_cols(fields_4, fields_3)
+doi$n_documents...8 <- NULL
+colnames(doi)[5] <- c("n_documents")
+colnames(doi)[6] <- c("PMID")
+colnames(doi)[7] <- c("DOI")
+
+VV <- doi
+
+VV$'Source name' <- VV$Source
+VV$'Source Display Name' <- VV$Source
+VV$'Target name' <- VV$Target
+VV$'Target Display Name' <- VV$Target
+VV$Confidence <- c("100")
+VV$Source <- NULL
+VV$Target <- NULL
+VV$Documents <- VV$n_documents
+VV$n_documents <- NULL
+VV$'Document IDs' <- VV$PMID
+VV$PMID <- NULL
+VV$Relationships <- VV$DOI
+VV$DOI <- NULL
+VV$'Link ID' <- c("0")
+VV2 <- VV[,c(11, 3, 4, 1, 5, 6, 2, 7, 8, 9, 10)]
+colnames(VV2)[4] <- "Source type"
+colnames(VV2)[7] <- "Target type"
+VV2[VV2==""]<-NA
+VV2<-VV2[complete.cases(VV2),]
+
+
+# write_tsv(VV2, "edges_drugs_12_10_filtered_doi_2020.tsv")
+write.csv(VV2,"edges_drugs_12_10_filtered_doi_2020.csv", row.names=F)
+
+
+
+sourceX <- doi[,c(1,2)]
+targetX <- doi[,c(3,4)] 
+colnames(sourceX) <- c("x","y")
+colnames(targetX) <- c("x","y")
+nodes <- rbind(sourceX,targetX)
+#remove duplicated nodes
+nodes <- nodes[!duplicated(nodes), ]
+nodes[,"name"] = nodes[,1]
+colnames(nodes) <- c("ID","Class","Label")
+head(nodes)
+table(duplicated(nodes))
+
+nodes$current_name_virus <- nodes$ID
+tax_ID <- fread("tax_ID_fornodes.csv")
+tax_ID <- as.data.frame(tax_ID)
+tax_ID$current_name_virus <- as.character(tax_ID$current_name_virus)
+
+library(dplyr)
+
+# annotations_taxID <- inner_join(edges, tax_ID, by = "species")
+nodes_final <- merge(nodes, tax_ID, by = "current_name_virus", all.x = TRUE)
+nodes_final <- distinct(nodes_final)
+head(nodes_final)
+
+# nodes_final <- nodes_final[-1,]
+
+nodes_final$current_name_virus <- NULL
+nodes_final[is.na(nodes_final)] <- ""
+head(nodes_final)
+nodes_final$Label <- nodes_final$Abbreviation
+nodes_final$Label2 <- nodes_final$ID
+
+nodes2 <- read.delim(file = "Nodes_drugs_degree_5_curada.csv", sep = '\t', header = TRUE)
+colnames(nodes2)[1] <- "ID"
+
+
+# nodes1_final <- merge(nodes_final, nodes2, by = "ID", all = TRUE)
+nodes1_final1 <- merge(nodes_final, nodes2, by = "ID", all.x = TRUE)
+# nodes1_final1 <- distinct(nodes1_final1)
+# nodes1_final1[is.na(nodes1_final1)] <- ""
+
+nodes1_final1[is.na(nodes1_final1)] <- ""
+write_tsv(nodes1_final1, "nodes_drugs_12_10_anotada_clinicaltrials_filtered_doi.tsv")
+
+######
+#filtrando as reviews
+#diseases
+
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(httr)
+library(jsonlite)
+library(stringr)
+library(reshape2)
+library(XML)
+library(readr)
+options(stringsAsFactors = F)
+
+rm(list = ls())
+
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/"
+setwd(workingdir)
+
+options(stringsAsFactors = F)
+
+PMID_diseases <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/edges_diseases_12_10.tsv")
+
+PMID_diseases <- PMID_diseases[!PMID_diseases$Source == "Human immunodeficiency virus",]
+
+sep = "///"
+cond <- PMID_diseases %>% mutate(id = paste(Source,
+                                         sep = sep,
+                                         Target))
+
+
+cond1 <- cond[,c(6, 7)]
+cond1$PMIDs <- gsub(' ', '', cond1$PMIDs)
+cond1$PMIDs <- as.character(cond1$PMIDs)
+
+vv2 <- cond1 %>% 
+  separate_rows(PMIDs, sep = "\\|" , convert = FALSE)
+
+vv3 <- vv2[!duplicated(vv2), ]
+
+# write_tsv(vv3, "PMIDs_genes.tsv")
+
+PMID_final <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final_types.tsv")
+
+PMID_total <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final.tsv")
+
+
+PMID_select <- merge(PMID_total, PMID_final, by = "TYPE", all.x = TRUE)
+PMID_select1 <- PMID_select[!duplicated(PMID_select), ]
+
+colnames(vv3) <- c("PMID", "id")
+class(vv3$PMID)
+class(PMID_select1$PMID)
+PMID_select1$PMID <- as.character(PMID_select1$PMID)
+# PMID_select1 <- PMID_select1[,c(2, 3, 5, 6, 7)]
+
+
+vv4 <- PMID_select1[match(vv3$PMID, PMID_select1$PMID),]
+vv5 <- dplyr::bind_cols(vv3, vv4)
+
+write_tsv(vv5, "PMIDs_edgesdiseases_triados_articles.tsv")
+
+
+vv6 <- anti_join(vv3, PMID_select1)
+vv7 <- left_join(vv6, PMID_select1)
+write_tsv(vv7, "PMIDs_edgesdiseases_articles_not_reviewed.tsv")
+
+vv5$approved[is.na(vv5$approved)] <- "I"
+
+
+filtro <- vv5[!vv5$approved == "N",]
+write_tsv(filtro, "PMIDs_edgesdiseases_only_approved_articles.tsv")
+
+# recomeçar para não dar pau
+
+filtro1 <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/PMIDs_edgesdiseases_only_approved_articles.tsv")
+head(filtro1)
+# filtro <- filtro [,c(1, 2, 3, 6)]
+PMC2PMID <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/PMC-ids.csv")
+# PMC2PMID <- PMC2PMID[,c(4,8,10)]
+PMC2PMID <- PMC2PMID[!duplicated(PMC2PMID), ]
+PMC2PMID <- dplyr::arrange(PMC2PMID, desc(Year)) 
+
+
+dfr <- PMC2PMID[match(filtro$PMID...1, PMC2PMID$PMID),] 
+head(dfr)
+fim <- dplyr::bind_cols(filtro, dfr)
+head(fim)
+
+fim1 <- fim[,c(2, 9, 1, 4, 19, 18, 5, 13, 17, 3, 7, 8, 10, 11)]
+fim2 <- fim1[,c(1, 3, 6, 8, 9, 10, 11, 12, 13, 14, 2)]
+
+colnames(fim2)[1] <- "edges_diseases"
+colnames(fim2)[2] <- "PMID"
+colnames(fim2)[11] <- "jornal_article_curation"
+
+write_tsv(fim2, "PMIDs_edgesdiseases_20_10_final.tsv")
+
+###
+
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(httr)
+library(jsonlite)
+library(stringr)
+library(reshape2)
+library(XML)
+library(readr)
+options(stringsAsFactors = F)
+
+rm(list = ls())
+
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/"
+setwd(workingdir)
+
+options(stringsAsFactors = F)
+
+filtro1 <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/PMIDs_edgesdiseases_20_10_final.tsv")
+
+#pmid
+
+vv <- filtro1[,c(1, 2)]
+
+colnames(vv) <- c("disease_association", "document")
+
+vv1 <- vv %>% 
+  select(disease_association, document) %>% 
+  group_by(disease_association) %>%
+  summarise(PMIDs = paste0(document, collapse = " | "))
+
+vv2 <- vv %>% 
+  select(disease_association, document) %>% 
+  group_by(disease_association) %>%
+  summarise(n_documents = n())
+
+vv3 <- merge(vv1, vv2)
+
+vv4 <- vv3 %>%
+  separate(disease_association, c("Source", "Target"), "///")
+
+fields <- vv4
+
+fields$Source_type <- c("VIRUS")
+fields$target_type <- c("DISEASE")
+
+fields_2 <- fields[which(fields[,"n_documents"] > 1),]
+
+fields_4 <- fields_2[,c(1, 5, 2, 6, 4, 3)]
+
+
+# doi
+
+vv <- filtro1[,c(1, 5)]
+
+colnames(vv) <- c("disease_association", "document")
+
+vv1 <- vv %>% 
+  select(disease_association, document) %>% 
+  group_by(disease_association) %>%
+  summarise(PMIDs = paste0(document, collapse = " | "))
+
+vv2 <- vv %>% 
+  select(disease_association, document) %>% 
+  group_by(disease_association) %>%
+  summarise(n_documents = n())
+
+vv3 <- merge(vv1, vv2)
+
+vv4 <- vv3 %>%
+  separate(disease_association, c("Source", "Target"), "///")
+
+fields <- vv4
+
+fields$Source_type <- c("VIRUS")
+fields$target_type <- c("DISEASE")
+
+fields_2 <- fields[which(fields[,"n_documents"] > 1),]
+
+fields_3 <- fields_2[,c(3, 4)]
+
+doi <- dplyr::bind_cols(fields_4, fields_3)
+doi$n_documents...8 <- NULL
+colnames(doi)[5] <- c("n_documents")
+colnames(doi)[6] <- c("PMID")
+colnames(doi)[7] <- c("DOI")
+
+VV <- doi
+
+VV$'Source name' <- VV$Source
+VV$'Source Display Name' <- VV$Source
+VV$'Target name' <- VV$Target
+VV$'Target Display Name' <- VV$Target
+VV$Confidence <- c("100")
+VV$Source <- NULL
+VV$Target <- NULL
+VV$Documents <- VV$n_documents
+VV$n_documents <- NULL
+VV$'Document IDs' <- VV$PMID
+VV$PMID <- NULL
+VV$Relationships <- VV$DOI
+VV$DOI <- NULL
+VV$'Link ID' <- c("0")
+VV2 <- VV[,c(11, 3, 4, 1, 5, 6, 2, 7, 8, 9, 10)]
+colnames(VV2)[4] <- "Source type"
+colnames(VV2)[7] <- "Target type"
+VV2[VV2==""]<-NA
+VV2<-VV2[complete.cases(VV2),]
+
+# write_tsv(VV2, "edges_disease_12_10_filtered_doi_2020.tsv")
+write.csv(VV2,"edges_disease_12_10_filtered_doi_2020.csv", row.names=F)
+
+
+sourceX <- doi[,c(1,2)]
+targetX <- doi[,c(3,4)] 
+colnames(sourceX) <- c("x","y")
+colnames(targetX) <- c("x","y")
+nodes <- rbind(sourceX,targetX)
+#remove duplicated nodes
+nodes <- nodes[!duplicated(nodes), ]
+nodes[,"name"] = nodes[,1]
+colnames(nodes) <- c("ID","Class","Label")
+head(nodes)
+table(duplicated(nodes))
+
+nodes$current_name_virus <- nodes$ID
+tax_ID <- fread("tax_ID_fornodes.csv")
+tax_ID <- as.data.frame(tax_ID)
+tax_ID$current_name_virus <- as.character(tax_ID$current_name_virus)
+
+library(dplyr)
+
+# annotations_taxID <- inner_join(edges, tax_ID, by = "species")
+nodes_final <- merge(nodes, tax_ID, by = "current_name_virus", all.x = TRUE)
+nodes_final <- distinct(nodes_final)
+head(nodes_final)
+
+# nodes_final <- nodes_final[-1,]
+
+nodes_final$current_name_virus <- NULL
+nodes_final[is.na(nodes_final)] <- ""
+head(nodes_final)
+nodes_final$Label <- nodes_final$Abbreviation
+nodes_final$Label2 <- nodes_final$ID
+
+
+write_tsv(nodes_final, "nodes_diseases_12_10_anotada_filtered_doi.tsv")
+
+######
+
+
+
+
+#evolution
+#filtered reviews
+##########
+
+
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(httr)
+library(jsonlite)
+library(stringr)
+library(reshape2)
+library(XML)
+options(stringsAsFactors = F)
+
+rm(list = ls())
+
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/"
+setwd(workingdir)
+
+options(stringsAsFactors = F)
+PMC2PMID <- fread("PMC-ids.csv")
+PMC2PMID <- PMC2PMID[,c(4,8:10)]
+
+edges_annotations <- fread("edges_annotations_12_10.tsv")
+edges_annotations$PMIDnone <- edges_annotations$PMID
+edges_annotations$PMID  <- gsub("[|None]","" , edges_annotations$PMID, ignore.case = TRUE)
+edges_annotations$PMID <- as.character(edges_annotations$PMID)
+
+#
+
+PMID_final <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final_types.tsv")
+
+PMID_total <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final.tsv")
+
+
+PMID_select <- merge(PMID_total, PMID_final, by = "TYPE", all.x = TRUE)
+PMID_select1 <- PMID_select[!duplicated(PMID_select), ]
+
+class(edges_annotations$PMID)
+class(PMID_select1$PMID)
+PMID_select1$PMID <- as.character(PMID_select1$PMID)
+# PMID_select1 <- PMID_select1[,c(2, 3, 5, 6, 7)]
+
+
+vv4 <- edges_annotations[match(PMID_select1$PMID, edges_annotations$PMID),]
+
+
+
+
+PMC2PMID$PMID <- as.character(PMC2PMID$PMID)
+
+convertedPMID <- merge(vv4, PMC2PMID, by = "PMID", all.x = TRUE)
+convertedPMID[is.na(convertedPMID)] <- ""
+write_tsv(convertedPMID, "edges_annotations_12_10_filtered_for_evolution.tsv")
+
+
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/"
+setwd(workingdir)
+
+vv1 <- dplyr::filter(convertedPMID, Year <= "2020")
+vv1 <- vv1[,c(2:10)]
+colnames(vv1)[9] <- "PMID"
+write_tsv(vv1, "2020_edges_annotations_12_10_for_evolution.txt")
+
+vv2 <- dplyr::filter(convertedPMID, Year <= "2019")
+vv2 <- vv2[,c(2:10)]
+colnames(vv2)[9] <- "PMID"
+write_tsv(vv2, "2019_edges_annotations_12_10_for_evolution.txt")
+
+vv3 <- dplyr::filter(convertedPMID, Year <= "2018")
+vv3 <- vv3[,c(2:10)]
+colnames(vv3)[9] <- "PMID"
+write_tsv(vv3, "2018_edges_annotations_12_10_for_evolution.txt")
+
+vv4 <- dplyr::filter(convertedPMID, Year <= "2017")
+vv4 <- vv4[,c(2:10)]
+colnames(vv4)[9] <- "PMID"
+write_tsv(vv4, "2017_edges_annotations_12_10_for_evolution.txt")
+
+vv5 <- dplyr::filter(convertedPMID, Year <= "2016")
+vv5 <- vv5[,c(2:10)]
+colnames(vv5)[9] <- "PMID"
+write_tsv(vv5, "2016_edges_annotations_12_10_for_evolution.txt")
+
+
+
+vv6 <- dplyr::filter(convertedPMID, Year <= "2015")
+vv6 <- vv6[,c(2:10)]
+colnames(vv6)[9] <- "PMID"
+write_tsv(vv6, "2015_edges_annotations_12_10_for_evolution.txt")
+
+vv7 <- dplyr::filter(convertedPMID, Year <= "2014")
+vv7 <- vv7[,c(2:10)]
+colnames(vv7)[9] <- "PMID"
+write_tsv(vv7, "2014_edges_annotations_12_10_for_evolution.txt")
+
+vv8 <- dplyr::filter(convertedPMID, Year <= "2013")
+vv8 <- vv8[,c(2:10)]
+colnames(vv8)[9] <- "PMID"
+write_tsv(vv8, "2013_edges_annotations_12_10_for_evolution.txt")
+
+vv9 <- dplyr::filter(convertedPMID, Year <= "2012")
+vv9 <- vv9[,c(2:10)]
+colnames(vv9)[9] <- "PMID"
+write_tsv(vv9, "2012_edges_annotations_12_10_for_evolution.txt")
+
+vv10 <- dplyr::filter(convertedPMID, Year <= "2011")
+vv10 <- vv10[,c(2:10)]
+colnames(vv10)[9] <- "PMID"
+write_tsv(vv10, "2011_edges_annotations_12_10_for_evolution.txt")
+
+vv11 <- dplyr::filter(convertedPMID, Year <= "2010")
+vv11 <- vv11[,c(2:10)]
+colnames(vv11)[9] <- "PMID"
+write_tsv(vv11, "2010_edges_annotations_12_10_for_evolution.txt")
+
+vv12 <- dplyr::filter(convertedPMID, Year <= "2009")
+vv12 <- vv12[,c(2:10)]
+colnames(vv12)[9] <- "PMID"
+write_tsv(vv12, "2009_edges_annotations_12_10_for_evolution.txt")
+
+vv13 <- dplyr::filter(convertedPMID, Year <= "2008")
+vv13 <- vv13[,c(2:10)]
+colnames(vv13)[9] <- "PMID"
+write_tsv(vv13, "2008_edges_annotations_12_10_for_evolution.txt")
+
+vv14 <- dplyr::filter(convertedPMID, Year <= "2007")
+vv14 <- vv14[,c(2:10)]
+colnames(vv14)[9] <- "PMID"
+write_tsv(vv14, "2007_edges_annotations_12_10_for_evolution.txt")
+
+vv15 <- dplyr::filter(convertedPMID, Year <= "2006")
+vv15 <- vv15[,c(2:10)]
+colnames(vv15)[9] <- "PMID"
+write_tsv(vv15, "2006_edges_annotations_12_10_for_evolution.txt")
+
+vv16 <- dplyr::filter(convertedPMID, Year <= "2005")
+vv16 <- vv16[,c(2:10)]
+colnames(vv16)[9] <- "PMID"
+write_tsv(vv16, "2005_edges_annotations_12_10_for_evolution.txt")
+
+vv17 <- dplyr::filter(convertedPMID, Year <= "2004")
+vv17 <- vv17[,c(2:10)]
+colnames(vv17)[9] <- "PMID"
+write_tsv(vv17, "2004_edges_annotations_12_10_for_evolution.txt")
+
+vv18 <- dplyr::filter(convertedPMID, Year <= "2003")
+vv18 <- vv18[,c(2:10)]
+colnames(vv18)[9] <- "PMID"
+write_tsv(vv18, "2003_edges_annotations_12_10_for_evolution.txt")
+
+vv19 <- dplyr::filter(convertedPMID, Year <= "2002")
+vv19 <- vv19[,c(2:10)]
+colnames(vv19)[9] <- "PMID"
+write_tsv(vv19, "2002_edges_annotations_12_10_for_evolution.txt")
+
+vv20 <- dplyr::filter(convertedPMID, Year <= "2001")
+vv20 <- vv20[,c(2:10)]
+colnames(vv20)[9] <- "PMID"
+write_tsv(vv20, "2001_edges_annotations_12_10_for_evolution.txt")
+
+vv21 <- dplyr::filter(convertedPMID, Year <= "2000")
+vv21 <- vv21[,c(2:10)]
+colnames(vv21)[9] <- "PMID"
+write_tsv(vv21, "2000_edges_annotations_12_10_for_evolution.txt")
+
+vv22 <- dplyr::filter(convertedPMID, Year <= "1999")
+vv22 <- vv22[,c(2:10)]
+colnames(vv22)[9] <- "PMID"
+write_tsv(vv22, "1999_edges_annotations_12_10_for_evolution.txt")
+
+vv23 <- dplyr::filter(convertedPMID, Year <= "1998")
+vv23 <- vv23[,c(2:10)]
+colnames(vv23)[9] <- "PMID"
+write_tsv(vv23, "1998_edges_annotations_12_10_for_evolution.txt")
+
+vv24 <- dplyr::filter(convertedPMID, Year <= "1997")
+vv24 <- vv24[,c(2:10)]
+colnames(vv24)[9] <- "PMID"
+write_tsv(vv24, "1997_edges_annotations_12_10_for_evolution.txt")
+
+vv25 <- dplyr::filter(convertedPMID, Year <= "1996")
+vv25 <- vv25[,c(2:10)]
+colnames(vv25)[9] <- "PMID"
+write_tsv(vv25, "1996_edges_annotations_12_10_for_evolution.txt")
+
+vv26 <- dplyr::filter(convertedPMID, Year <= "1995")
+vv26 <- vv26[,c(2:10)]
+colnames(vv26)[9] <- "PMID"
+write_tsv(vv26, "1995_edges_annotations_12_10_for_evolution.txt")
+
+vv27 <- dplyr::filter(convertedPMID, Year <= "1994")
+vv27 <- vv27[,c(2:10)]
+colnames(vv27)[9] <- "PMID"
+write_tsv(vv27, "1994_edges_annotations_12_10_for_evolution.txt")
+
+vv28 <- dplyr::filter(convertedPMID, Year <= "1993")
+vv28 <- vv28[,c(2:10)]
+colnames(vv28)[9] <- "PMID"
+write_tsv(vv28, "1993_edges_annotations_12_10_for_evolution.txt")
+
+vv29 <- dplyr::filter(convertedPMID, Year <= "1992")
+vv29 <- vv29[,c(2:10)]
+colnames(vv29)[9] <- "PMID"
+write_tsv(vv29, "1992_edges_annotations_12_10_for_evolution.txt")
+
+vv30 <- dplyr::filter(convertedPMID, Year <= "1991")
+vv30 <- vv30[,c(2:10)]
+colnames(vv30)[9] <- "PMID"
+write_tsv(vv30, "1991_edges_annotations_12_10_for_evolution.txt")
+
+vv31 <- dplyr::filter(convertedPMID, Year <= "1990")
+vv31 <- vv31[,c(2:10)]
+colnames(vv31)[9] <- "PMID"
+write_tsv(vv31, "1990_edges_annotations_12_10_for_evolution.txt")
+
+
+# aqui abrir e rodar o readme_covid19_reposicionamento_awk_evolution.txt
+
+# guardar os resultados para cada ano na pasta evolution/edgescovid19_reposicionamento_awk_evolution_results com os nomes covid19_genes_tillXXXX.tsv
+# colocar cada um deles na sua devida pasta timesérie
+# montas as pastas nodes
+
+# ###########
+rm(list = ls())
+
+library(dplyr)
+library(readr)
+library(data.table)
+library(tidyr)
+library(ggplot2)
+
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/timeserie/genes/"
+# workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/timeserie/genes/2020/"
+
+setwd(workingdir)
+
+tax_ID <- fread("tax_ID_fornodes.csv")
+tax_ID <- as.data.frame(tax_ID)
+tax_ID$current_name_virus <- as.character(tax_ID$current_name_virus)
+PMC2PMID <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/PMC-ids.csv")
+
+PMID_final <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final_types.tsv")
+
+PMID_total <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final.tsv")
+PMID_select <- merge(PMID_total, PMID_final, by = "TYPE", all.x = TRUE)
+PMID_select1 <- PMID_select[!duplicated(PMID_select), ]
+PMC2PMID <- PMC2PMID[!duplicated(PMC2PMID), ]
+PMC2PMID <- dplyr::arrange(PMC2PMID, desc(Year)) 
+
+
+mockfunc <- function(workingdir,filename){
+  setwd(workingdir)
+  folder <- ""
+  year <- getwd()
+  year <- sub("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/timeserie/genes/", "", year)
+  output_folder <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/nodes/genes/"
+  stringsAsFactors=FALSE
+  fields <- fread(filename)
+  # fields <- fread("covid19_genes_till2020.tsv")
+  # fields$value <- NULL
+  fields <- fields[!apply(fields == "", 1, any), ]
+  fields <- fields[!fields$Source == "Human immunodeficiency virus",]
+  sep = "///"
+  cond <- fields %>% mutate(id = paste(Source,
+                                       sep = sep,
+                                       Target))
+  cond1 <- cond[,c(4, 5)]
+  # cond1$PMIDs <- gsub(' ', '', cond1$PMIDs)
+  cond1$PMIDs <- as.character(cond1$PMIDs)
+  
+  vv2 <- cond1 %>% 
+    separate_rows(PMIDs, sep = "," , convert = FALSE)
+  
+  vv3 <- vv2[!duplicated(vv2), ]
+  
+  # PMID_final <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final_types.tsv")
+  # 
+  # PMID_total <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final.tsv")
+  # 
+  # PMID_select <- merge(PMID_total, PMID_final, by = "TYPE", all.x = TRUE)
+  # PMID_select1 <- PMID_select[!duplicated(PMID_select), ]
+  
+  colnames(vv3) <- c("PMID", "id")
+  
+  PMID_select1$PMID <- as.character(PMID_select1$PMID)
+  vv4 <- PMID_select1[match(vv3$PMID, PMID_select1$PMID),]
+  vv5 <- dplyr::bind_cols(vv3, vv4)
+  # vv6 <- anti_join(vv3, PMID_select1)
+  # vv7 <- left_join(vv6, PMID_select1)
+  # # write.csv(vv7,file=paste0(output_folder, "/nodes_", year, "/PMIDs_edgesgenes_articles_not_reviewed_", year, ".csv"),row.names=F)
+  # # 
+  # 
+  # vv5$approved[is.na(vv5$approved)] <- "I"
+#   # 
+# filtro <- vv5[!vv5$approved == "N",]
+  # write.csv(filtro,file=paste0(output_folder, "/nodes_", year, "/PMIDs_edgesgenes_only_approved_articles_", year, ".csv"),row.names=F)
+  # 
+  # PMC2PMID <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/PMC-ids.csv")
+  
+  # PMC2PMID <- PMC2PMID[!duplicated(PMC2PMID), ]
+  # PMC2PMID <- dplyr::arrange(PMC2PMID, desc(Year)) 
+  
+  filtro <- vv5[!vv5$approved == "N",]
+  dfr <- PMC2PMID[match(filtro$PMID...1, PMC2PMID$PMID),] 
+  
+  fim <- dplyr::bind_cols(filtro, dfr)
+  
+  fim1 <- fim[,c(2, 9, 1, 4, 19, 18, 5, 13, 17, 3, 7, 8, 10, 11)]
+  fim2 <- fim1[,c(1, 3, 6, 8, 9, 10, 11, 12, 13, 14, 2)]
+  
+  colnames(fim2)[1] <- "edges_genes"
+  colnames(fim2)[2] <- "PMID"
+  colnames(fim2)[11] <- "jornal_article_curation"
+  
+  write.csv(fim2,file=paste0(output_folder, "/nodes_", year, "/PMIDs_edgesgenes_20_10_final_", year, ".csv"),row.names=F)
+  
+  vv <- fim2[,c(1, 2)]
+  
+  colnames(vv) <- c("gene_association", "document")
+  
+  vv1 <- vv %>% 
+    select(gene_association, document) %>% 
+    group_by(gene_association) %>%
+    summarise(PMIDs = paste0(document, collapse = " | "))
+  
+  vv2 <- vv %>% 
+    select(gene_association, document) %>% 
+    group_by(gene_association) %>%
+    summarise(n_documents = n())
+  
+  vv3 <- merge(vv1, vv2)
+  
+  vv4 <- vv3 %>%
+    separate(gene_association, c("Source", "Target"), "///")
+  
+  GG <- vv4
+  
+  GG$Source_type <- c("VIRUS")
+  GG$target_type <- c("GENE")
+  
+  GG_2 <- GG[which(GG[,"n_documents"] > 1),]
+  
+  GG_4 <- GG_2[,c(1, 5, 2, 6, 4, 3)]
+  
+  vv <- fim2[,c(1, 5)]
+  
+  colnames(vv) <- c("gene_association", "document")
+  
+  vv1 <- vv %>% 
+    select(gene_association, document) %>% 
+    group_by(gene_association) %>%
+    summarise(PMIDs = paste0(document, collapse = " | "))
+  
+  vv2 <- vv %>% 
+    select(gene_association, document) %>% 
+    group_by(gene_association) %>%
+    summarise(n_documents = n())
+  
+  vv3 <- merge(vv1, vv2)
+  
+  vv4 <- vv3 %>%
+    separate(gene_association, c("Source", "Target"), "///")
+  
+  TT <- vv4
+  
+  TT$Source_type <- c("VIRUS")
+  TT$target_type <- c("GENE")
+  
+  TT_2 <- TT[which(TT[,"n_documents"] > 1),]
+  
+  TT_3 <- TT_2[,c(3, 4)]
+  
+  doi <- dplyr::bind_cols(GG_4, TT_3)
+  doi$n_documents...8 <- NULL
+  colnames(doi)[5] <- c("n_documents")
+  colnames(doi)[6] <- c("PMID")
+  colnames(doi)[7] <- c("DOI")
+  VV <- doi
+  
+  VV$'Source name' <- VV$Source
+  VV$'Source Display Name' <- VV$Source
+  VV$'Target name' <- VV$Target
+  VV$'Target Display Name' <- VV$Target
+  VV$Confidence <- c("100")
+  VV$Source <- NULL
+  VV$Target <- NULL
+  VV$Documents <- VV$n_documents
+  VV$n_documents <- NULL
+  VV$'Document IDs' <- VV$PMID
+  VV$PMID <- NULL
+  VV$Relationships <- VV$DOI
+  VV$DOI <- NULL
+  VV$'Link ID' <- c("0")
+  VV2 <- VV[,c(11, 3, 4, 1, 5, 6, 2, 7, 8, 9, 10)]
+  colnames(VV2)[4] <- "Source type"
+  colnames(VV2)[7] <- "Target type"
+  VV2[VV2==""]<-NA
+  VV2<-VV2[complete.cases(VV2),]
+  
+  write.csv(VV2,file=paste0(output_folder, "/nodes_", year, "/edges_genes_12_10_filtered_doi_", year, ".csv"),row.names=F)
+  
+  # sourceX <- VV2[,c(2,4)]
+  # targetX <- VV2[,c(5,7)] 
+  # colnames(sourceX) <- c("x","y")
+  # colnames(targetX) <- c("x","y")
+  # nodes <- rbind(sourceX,targetX)
+  # 
+  # nodes <- nodes[!duplicated(nodes), ]
+  # nodes[,"name"] = nodes[,1]
+  # colnames(nodes) <- c("ID","Class","Label")
+  # 
+  # nodes$current_name_virus <- nodes$ID
+  # # tax_ID <- fread("tax_ID_fornodes.csv")
+  # # tax_ID <- as.data.frame(tax_ID)
+  # tax_ID$current_name_virus <- as.character(tax_ID$current_name_virus)
+  # 
+  # nodes_final <- merge(nodes, tax_ID, by = "current_name_virus", all.x = TRUE)
+  # nodes_final <- distinct(nodes_final)
+  # 
+  # 
+  # nodes_final$current_name_virus <- NULL
+  # nodes_final[is.na(nodes_final)] <- ""
+  # nodes_final$Label <- nodes_final$Abbreviation
+  # nodes_final$Label2 <- nodes_final$ID
+  # 
+  # write.csv(nodes_final,file=paste0(output_folder, "/nodes_", year, "/nodes_genes_12_10_anotada_filtered_doi_", year, ".csv"),row.names=F)
+  return(0)
+}
+  
+dir_list1 <- list.dirs(path = "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/timeserie/genes")
+print(dir_list1)
+dir_list1 <- tail(dir_list1, -1)
+
+for (current_dir in dir_list1) {
+  file_list <- list.files(path = current_dir)
+  
+  for (current_file in file_list) {
+    print(c(current_dir, current_file))
+    x <- mockfunc(workingdir = paste(current_dir, "/", sep = ""), filename = current_file)
+  }
+}
+
+# evolution drugs
+
+rm(list = ls())
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/timeserie/drugs/"
+setwd(workingdir)
+
+# tax_ID <- fread("tax_ID_fornodes.csv")
+# tax_ID <- as.data.frame(tax_ID)
+# tax_ID$current_name_virus <- as.character(tax_ID$current_name_virus)
+
+tax_ID <- fread("tax_ID_fornodes.csv")
+tax_ID <- as.data.frame(tax_ID)
+tax_ID$current_name_virus <- as.character(tax_ID$current_name_virus)
+PMC2PMID <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/PMC-ids.csv")
+
+PMID_final <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final_types.tsv")
+
+PMID_total <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final.tsv")
+PMID_select <- merge(PMID_total, PMID_final, by = "TYPE", all.x = TRUE)
+PMID_select1 <- PMID_select[!duplicated(PMID_select), ]
+PMC2PMID <- PMC2PMID[!duplicated(PMC2PMID), ]
+PMC2PMID <- dplyr::arrange(PMC2PMID, desc(Year)) 
+
+mockfunc <- function(workingdir,filename){
+  setwd(workingdir)
+  folder <- ""
+  year <- getwd()
+  year <- sub("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/timeserie/drugs/", "", year)
+  output_folder <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/nodes/drugs"
+  stringsAsFactors=FALSE
+  fields <- fread(filename)
+  # fields <- fread("covid19_genes_till2020.tsv")
+  # fields$value <- NULL
+  fields <- fields[!apply(fields == "", 1, any), ]
+  fields <- fields[!fields$Source == "Human immunodeficiency virus",]
+  sep = "///"
+  cond <- fields %>% mutate(id = paste(Source,
+                                       sep = sep,
+                                       Target))
+  cond1 <- cond[,c(4, 5)]
+  # cond1$PMIDs <- gsub(' ', '', cond1$PMIDs)
+  cond1$PMIDs <- as.character(cond1$PMIDs)
+  
+  vv2 <- cond1 %>% 
+    separate_rows(PMIDs, sep = "," , convert = FALSE)
+  
+  vv3 <- vv2[!duplicated(vv2), ]
+  
+  # PMID_final <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final_types.tsv")
+  # 
+  # PMID_total <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final.tsv")
+  # 
+  # PMID_select <- merge(PMID_total, PMID_final, by = "TYPE", all.x = TRUE)
+  # PMID_select1 <- PMID_select[!duplicated(PMID_select), ]
+  
+  colnames(vv3) <- c("PMID", "id")
+  
+  PMID_select1$PMID <- as.character(PMID_select1$PMID)
+  vv4 <- PMID_select1[match(vv3$PMID, PMID_select1$PMID),]
+  vv5 <- dplyr::bind_cols(vv3, vv4)
+  # vv6 <- anti_join(vv3, PMID_select1)
+  # vv7 <- left_join(vv6, PMID_select1)
+  # # write.csv(vv7,file=paste0(output_folder, "/nodes_", year, "/PMIDs_edgesgenes_articles_not_reviewed_", year, ".csv"),row.names=F)
+  # # 
+  # 
+  # vv5$approved[is.na(vv5$approved)] <- "I"
+  #   # 
+  # filtro <- vv5[!vv5$approved == "N",]
+  # write.csv(filtro,file=paste0(output_folder, "/nodes_", year, "/PMIDs_edgesgenes_only_approved_articles_", year, ".csv"),row.names=F)
+  # 
+  # PMC2PMID <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/PMC-ids.csv")
+  
+  # PMC2PMID <- PMC2PMID[!duplicated(PMC2PMID), ]
+  # PMC2PMID <- dplyr::arrange(PMC2PMID, desc(Year)) 
+  
+  filtro <- vv5[!vv5$approved == "N",]
+  dfr <- PMC2PMID[match(filtro$PMID...1, PMC2PMID$PMID),] 
+  
+  fim <- dplyr::bind_cols(filtro, dfr)
+  
+  fim1 <- fim[,c(2, 9, 1, 4, 19, 18, 5, 13, 17, 3, 7, 8, 10, 11)]
+  fim2 <- fim1[,c(1, 3, 6, 8, 9, 10, 11, 12, 13, 14, 2)]
+  
+  colnames(fim2)[1] <- "edges_drugs"
+  colnames(fim2)[2] <- "PMID"
+  colnames(fim2)[11] <- "jornal_article_curation"
+  
+  write.csv(fim2,file=paste0(output_folder, "/nodes_", year, "/PMIDs_edgesdrugs_20_10_final_", year, ".csv"),row.names=F)
+  
+  vv <- fim2[,c(1, 2)]
+  
+  colnames(vv) <- c("drug_association", "document")
+  
+  vv1 <- vv %>% 
+    select(drug_association, document) %>% 
+    group_by(drug_association) %>%
+    summarise(PMIDs = paste0(document, collapse = " | "))
+  
+  vv2 <- vv %>% 
+    select(drug_association, document) %>% 
+    group_by(drug_association) %>%
+    summarise(n_documents = n())
+  
+  vv3 <- merge(vv1, vv2)
+  
+  vv4 <- vv3 %>%
+    separate(drug_association, c("Source", "Target"), "///")
+  
+  fields <- vv4
+  
+  fields$Source_type <- c("VIRUS")
+  fields$target_type <- c("DRUG")
+  
+  fields_2 <- fields[which(fields[,"n_documents"] > 1),]
+  
+  fields_4 <- fields_2[,c(1, 5, 2, 6, 4, 3)]
+  
+  vv <- fim2[,c(1, 5)]
+  
+  colnames(vv) <- c("drug_association", "document")
+  
+  vv1 <- vv %>% 
+    select(drug_association, document) %>% 
+    group_by(drug_association) %>%
+    summarise(PMIDs = paste0(document, collapse = " | "))
+  
+  vv2 <- vv %>% 
+    select(drug_association, document) %>% 
+    group_by(drug_association) %>%
+    summarise(n_documents = n())
+  
+  vv3 <- merge(vv1, vv2)
+  
+  vv4 <- vv3 %>%
+    separate(drug_association, c("Source", "Target"), "///")
+  
+  fields <- vv4
+  
+  fields$Source_type <- c("VIRUS")
+  fields$target_type <- c("DRUG")
+  
+  fields_2 <- fields[which(fields[,"n_documents"] > 1),]
+  
+  fields_3 <- fields_2[,c(3, 4)]
+  
+  doi <- dplyr::bind_cols(fields_4, fields_3)
+  doi$n_documents...8 <- NULL
+  colnames(doi)[5] <- c("n_documents")
+  colnames(doi)[6] <- c("PMID")
+  colnames(doi)[7] <- c("DOI")
+  
+  VV <- doi
+  
+  VV$'Source name' <- VV$Source
+  VV$'Source Display Name' <- VV$Source
+  VV$'Target name' <- VV$Target
+  VV$'Target Display Name' <- VV$Target
+  VV$Confidence <- c("100")
+  VV$Source <- NULL
+  VV$Target <- NULL
+  VV$Documents <- VV$n_documents
+  VV$n_documents <- NULL
+  VV$'Document IDs' <- VV$PMID
+  VV$PMID <- NULL
+  VV$Relationships <- VV$DOI
+  VV$DOI <- NULL
+  VV$'Link ID' <- c("0")
+  VV2 <- VV[,c(11, 3, 4, 1, 5, 6, 2, 7, 8, 9, 10)]
+  colnames(VV2)[4] <- "Source type"
+  colnames(VV2)[7] <- "Target type"
+  VV2[VV2==""]<-NA
+  VV2<-VV2[complete.cases(VV2),]
+  
+  write.csv(VV2,file=paste0(output_folder, "/nodes_", year, "/edges_drugs_12_10_filtered_doi_", year, ".csv"),row.names=F)
+  
+  # sourceX <- doi[,c(1,2)]
+  # targetX <- doi[,c(3,4)] 
+  # colnames(sourceX) <- c("x","y")
+  # colnames(targetX) <- c("x","y")
+  # nodes <- rbind(sourceX,targetX)
+  # 
+  # nodes <- nodes[!duplicated(nodes), ]
+  # nodes[,"name"] = nodes[,1]
+  # colnames(nodes) <- c("ID","Class","Label")
+  # 
+  # nodes$current_name_virus <- nodes$ID
+  # # tax_ID <- fread("tax_ID_fornodes.csv")
+  # # tax_ID <- as.data.frame(tax_ID)
+  # # tax_ID$current_name_virus <- as.character(tax_ID$current_name_virus)
+  # # 
+  # # nodes_final <- merge(nodes, tax_ID, by = "current_name_virus", all.x = TRUE)
+  # # nodes_final <- distinct(nodes_final)
+  # # 
+  # # 
+  # # nodes_final$current_name_virus <- NULL
+  # # nodes_final[is.na(nodes_final)] <- ""
+  # # nodes_final$Label <- nodes_final$Abbreviation
+  # # nodes_final$Label2 <- nodes_final$ID
+  # 
+  # # nodes$current_name_virus <- nodes$ID
+  # # tax_ID <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/tax_ID_fornodes.csv")
+  # # tax_ID <- as.data.frame(tax_ID)
+  # tax_ID$current_name_virus <- as.character(tax_ID$current_name_virus)
+  # 
+  # nodes_final <- merge(nodes, tax_ID, by = "current_name_virus", all.x = TRUE)
+  # nodes_final <- distinct(nodes_final)
+  # 
+  # # nodes_final <- nodes_final[-1,]
+  # 
+  # nodes_final$current_name_virus <- NULL
+  # nodes_final[is.na(nodes_final)] <- ""
+  # 
+  # # drugs_mesh <- read.delim("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/mesh.csv", sep = '\t', header = TRUE)
+  # # colnames(drugs_mesh) <- c("ID")
+  # # drugs_mesh$clinicaltrials <- c("yes")
+  # # head(drugs_mesh)
+  # # drugs_mesh <- distinct(drugs_mesh)
+  # nodes2 <- read.delim(file = "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/Nodes_drugs_degree_5_curada.csv", sep = '\t', header = TRUE)
+  # colnames(nodes2)[1] <- "ID"
+  # nodes1_final <- merge(nodes_final, nodes2, by = "ID", all.x = TRUE)
+  # nodes1_final[is.na(nodes1_final)] <- ""
+  # 
+  # nodes2_final <- nodes1_final[,c(1, 2, 16, 18, 19, 20, 21, 5, 6, 9, 8, 10, 14, 15, 7, 4, 11, 12, 13, 34)]
+  # colnames(nodes2_final)[3] <- "Label"
+  # 
+  # # write.csv(nodes1_final, file=paste0(output_folder, "/nodes_", year, "/COVID_nodes_drugs_curada_", year, ".csv"),row.names=F)
+  # write.csv(nodes2_final,file=paste0(output_folder, "/nodes_", year, "/nodes_drugs_12_10_anotada_filtered_doi_", year, ".csv"),row.names=F)
+  # 
+  return(0)
+}
+
+dir_list1 <- list.dirs(path = "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/timeserie/drugs")
+print(dir_list1)
+dir_list1 <- tail(dir_list1, -1)
+
+for (current_dir in dir_list1) {
+  file_list <- list.files(path = current_dir)
+  
+  for (current_file in file_list) {
+    print(c(current_dir, current_file))
+    x <- mockfunc(workingdir = paste(current_dir, "/", sep = ""), filename = current_file)
+  }
+}
+
+
+#evolution_diseases
+
+rm(list = ls())
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/timeserie/disease/"
+setwd(workingdir)
+
+tax_ID <- fread("tax_ID_fornodes.csv")
+tax_ID <- as.data.frame(tax_ID)
+tax_ID$current_name_virus <- as.character(tax_ID$current_name_virus)
+PMC2PMID <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/PMC-ids.csv")
+
+PMID_final <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final_types.tsv")
+
+PMID_total <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final.tsv")
+PMID_select <- merge(PMID_total, PMID_final, by = "TYPE", all.x = TRUE)
+PMID_select1 <- PMID_select[!duplicated(PMID_select), ]
+PMC2PMID <- PMC2PMID[!duplicated(PMC2PMID), ]
+PMC2PMID <- dplyr::arrange(PMC2PMID, desc(Year)) 
+
+mockfunc <- function(workingdir,filename){
+  setwd(workingdir)
+  folder <- ""
+  year <- getwd()
+  year <- sub("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/timeserie/disease/", "", year)
+  output_folder <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/nodes/disease/"
+  stringsAsFactors=FALSE
+  fields <- fread(filename)
+  # fields <- fread("covid19_genes_till2020.tsv")
+  # fields$value <- NULL
+  fields <- fields[!apply(fields == "", 1, any), ]
+  fields <- fields[!fields$Source == "Human immunodeficiency virus",]
+  sep = "///"
+  cond <- fields %>% mutate(id = paste(Source,
+                                       sep = sep,
+                                       Target))
+  cond1 <- cond[,c(4, 5)]
+  # cond1$PMIDs <- gsub(' ', '', cond1$PMIDs)
+  cond1$PMIDs <- as.character(cond1$PMIDs)
+  
+  vv2 <- cond1 %>% 
+    separate_rows(PMIDs, sep = "," , convert = FALSE)
+  
+  vv3 <- vv2[!duplicated(vv2), ]
+  
+  # PMID_final <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final_types.tsv")
+  # 
+  # PMID_total <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/tabelas_processadas/onlyPMIDs_final.tsv")
+  # 
+  # PMID_select <- merge(PMID_total, PMID_final, by = "TYPE", all.x = TRUE)
+  # PMID_select1 <- PMID_select[!duplicated(PMID_select), ]
+  
+  colnames(vv3) <- c("PMID", "id")
+  
+  PMID_select1$PMID <- as.character(PMID_select1$PMID)
+  vv4 <- PMID_select1[match(vv3$PMID, PMID_select1$PMID),]
+  vv5 <- dplyr::bind_cols(vv3, vv4)
+  # vv6 <- anti_join(vv3, PMID_select1)
+  # vv7 <- left_join(vv6, PMID_select1)
+  # # write.csv(vv7,file=paste0(output_folder, "/nodes_", year, "/PMIDs_edgesgenes_articles_not_reviewed_", year, ".csv"),row.names=F)
+  # # 
+  # 
+  # vv5$approved[is.na(vv5$approved)] <- "I"
+  #   # 
+  # filtro <- vv5[!vv5$approved == "N",]
+  # write.csv(filtro,file=paste0(output_folder, "/nodes_", year, "/PMIDs_edgesgenes_only_approved_articles_", year, ".csv"),row.names=F)
+  # 
+  # PMC2PMID <- fread("/home/vivischuch/pubmed_zika/pubmed_results/pubtator/PMC-ids.csv")
+  
+  # PMC2PMID <- PMC2PMID[!duplicated(PMC2PMID), ]
+  # PMC2PMID <- dplyr::arrange(PMC2PMID, desc(Year)) 
+  
+  filtro <- vv5[!vv5$approved == "N",]
+  dfr <- PMC2PMID[match(filtro$PMID...1, PMC2PMID$PMID),] 
+  
+  fim <- dplyr::bind_cols(filtro, dfr)
+  
+  fim1 <- fim[,c(2, 9, 1, 4, 19, 18, 5, 13, 17, 3, 7, 8, 10, 11)]
+  fim2 <- fim1[,c(1, 3, 6, 8, 9, 10, 11, 12, 13, 14, 2)]
+  
+  colnames(fim2)[1] <- "edges_genes"
+  colnames(fim2)[2] <- "PMID"
+  colnames(fim2)[11] <- "jornal_article_curation"
+  
+  write.csv(fim2,file=paste0(output_folder, "/nodes_", year, "/PMIDs_edgesdiseases_20_10_final_", year, ".csv"),row.names=F)
+  
+  vv <- fim2[,c(1, 2)]
+  
+  colnames(vv) <- c("gene_association", "document")
+  
+  vv1 <- vv %>% 
+    select(gene_association, document) %>% 
+    group_by(gene_association) %>%
+    summarise(PMIDs = paste0(document, collapse = " | "))
+  
+  vv2 <- vv %>% 
+    select(gene_association, document) %>% 
+    group_by(gene_association) %>%
+    summarise(n_documents = n())
+  
+  vv3 <- merge(vv1, vv2)
+  
+  vv4 <- vv3 %>%
+    separate(gene_association, c("Source", "Target"), "///")
+  
+  fields <- vv4
+  
+  fields$Source_type <- c("VIRUS")
+  fields$target_type <- c("DISEASE")
+  
+  fields_2 <- fields[which(fields[,"n_documents"] > 1),]
+  
+  fields_4 <- fields_2[,c(1, 5, 2, 6, 4, 3)]
+  
+  vv <- fim2[,c(1, 5)]
+  
+  colnames(vv) <- c("gene_association", "document")
+  
+  vv1 <- vv %>% 
+    select(gene_association, document) %>% 
+    group_by(gene_association) %>%
+    summarise(PMIDs = paste0(document, collapse = " | "))
+  
+  vv2 <- vv %>% 
+    select(gene_association, document) %>% 
+    group_by(gene_association) %>%
+    summarise(n_documents = n())
+  
+  vv3 <- merge(vv1, vv2)
+  
+  vv4 <- vv3 %>%
+    separate(gene_association, c("Source", "Target"), "///")
+  
+  fields <- vv4
+  
+  fields$Source_type <- c("VIRUS")
+  fields$target_type <- c("DISEASE")
+  
+  fields_2 <- fields[which(fields[,"n_documents"] > 1),]
+  
+  fields_3 <- fields_2[,c(3, 4)]
+  
+  doi <- dplyr::bind_cols(fields_4, fields_3)
+  doi$n_documents...8 <- NULL
+  colnames(doi)[5] <- c("n_documents")
+  colnames(doi)[6] <- c("PMID")
+  colnames(doi)[7] <- c("DOI")
+  
+  VV <- doi
+  
+  VV$'Source name' <- VV$Source
+  VV$'Source Display Name' <- VV$Source
+  VV$'Target name' <- VV$Target
+  VV$'Target Display Name' <- VV$Target
+  VV$Confidence <- c("100")
+  VV$Source <- NULL
+  VV$Target <- NULL
+  VV$Documents <- VV$n_documents
+  VV$n_documents <- NULL
+  VV$'Document IDs' <- VV$PMID
+  VV$PMID <- NULL
+  VV$Relationships <- VV$DOI
+  VV$DOI <- NULL
+  VV$'Link ID' <- c("0")
+  VV2 <- VV[,c(11, 3, 4, 1, 5, 6, 2, 7, 8, 9, 10)]
+  colnames(VV2)[4] <- "Source type"
+  colnames(VV2)[7] <- "Target type"
+  VV2[VV2==""]<-NA
+  VV2<-VV2[complete.cases(VV2),]
+  
+  
+  write.csv(VV2,file=paste0(output_folder, "/nodes_", year, "/edges_disease_12_10_filtered_doi_", year, ".csv"),row.names=F)
+  
+  # sourceX <- doi[,c(1,2)]
+  # targetX <- doi[,c(3,4)] 
+  # colnames(sourceX) <- c("x","y")
+  # colnames(targetX) <- c("x","y")
+  # nodes <- rbind(sourceX,targetX)
+  # 
+  # nodes <- nodes[!duplicated(nodes), ]
+  # nodes[,"name"] = nodes[,1]
+  # colnames(nodes) <- c("ID","Class","Label")
+  # 
+  # nodes$current_name_virus <- nodes$ID
+  # # tax_ID <- fread("tax_ID_fornodes.csv")
+  # # tax_ID <- as.data.frame(tax_ID)
+  # tax_ID$current_name_virus <- as.character(tax_ID$current_name_virus)
+  # 
+  # nodes_final <- merge(nodes, tax_ID, by = "current_name_virus", all.x = TRUE)
+  # nodes_final <- distinct(nodes_final)
+  # 
+  # 
+  # nodes_final$current_name_virus <- NULL
+  # nodes_final[is.na(nodes_final)] <- ""
+  # nodes_final$Label <- nodes_final$Abbreviation
+  # nodes_final$Label2 <- nodes_final$ID
+  # 
+  # write.csv(nodes_final,file=paste0(output_folder, "/nodes_", year, "/nodes_disease_12_10_anotada_filtered_doi_", year, ".csv"),row.names=F)
+  # return(0)
+}
+
+dir_list1 <- list.dirs(path = "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/timeserie/disease")
+print(dir_list1)
+dir_list1 <- tail(dir_list1, -1)
+
+for (current_dir in dir_list1) {
+  file_list <- list.files(path = current_dir)
+  
+  for (current_file in file_list) {
+    print(c(current_dir, current_file))
+    x <- mockfunc(workingdir = paste(current_dir, "/", sep = ""), filename = current_file)
+  }
+}
+
+
+
+#count nodes for years
+
+rm(list = ls())
+
+workingdir <- "/home/vivischuch/worm_beautiful/nodes_1/"
+setwd(workingdir)
+
+countfunc <- function(workingdir,filename){
+  setwd(workingdir)
+  folder <- ""
+  output_folder <- paste0("/home/vivischuch/worm_beautiful/count/")
+  year <- getwd()
+  year <- sub("/home/vivischuch/worm_beautiful/nodes_1/nodes_", "", year)
+  csvfil <- dir('.', pattern = '\\.csv')
+  names(csvfil) <- gsub('\\.csv', '', csvfil)
+  names(csvfil) <- gsub('nodes_[0-9]{4}_', '', names(csvfil))
+  names(csvfil) <- gsub('_[0-9]{4}', '', names(csvfil))
+  files <- Map(function(filepath, filename){
+    tmp <- read.csv(filepath) 
+    tmp <- tmp%>%
+      group_by(Class)%>%
+      summarise(count_class = n())%>%
+      ungroup()%>%
+      mutate(file = filename)
+    return(tmp)
+  }, csvfil, names(csvfil))
+  files_df <- do.call(rbind, c(files, make.row.names = F))
+  files_df <- files_df%>%
+    spread(Class, count_class)%>%
+    as.data.frame()
+  files_df$DRUG <- NULL
+  files_df$CONDITION <- NULL
+  colnames(files_df) <- c("disease", year)
+  dir.create(paste0(output_folder))
+  write.csv(files_df, file = paste0(output_folder,"count_nodes_", year, ".csv"),row.names=F, quote = F)
+  return(0)
+}  
+
+dir_list <- list.dirs(path = "/home/vivischuch/worm_beautiful/nodes_1")
+print(dir_list)
+dir_list <- tail(dir_list, -1)
+
+for (current_dir in dir_list) {
+  file_list <- list.files(path = current_dir)
+  print(c(current_dir))
+  x <- countfunc(workingdir = paste(current_dir, "/", sep = ""), filename = current_dir)
+} 
+
+#+++++++++++++++++
+#join all dataframes
+
+rm(list = ls())
+stringsAsFactors=FALSE
+
+workingdir <- "/home/vivischuch/worm_beautiful/count/"
+setwd(workingdir)
+folder <- ""
+
+library(purrr)
+
+list_df <- list.files(path=paste0(workingdir,folder),pattern = ".csv",
+                      full.names = TRUE) %>% lapply(read.csv)
+df_tot <- reduce(list_df, full_join)
+
+workingdir <- "/home/vivischuch/worm_beautiful/"
+setwd(workingdir)
+folder <- ""
+output_folder <- paste0("/home/vivischuch/worm_beautiful/count_results/")
+dir.create(paste0(output_folder))
+write.csv(df_tot, file = paste0(folder,output_folder,"count_nodes_total.csv"),row.names=F, quote = F)
+
+#+++++++++++++++++++
+#line plot
+
+data_melted <- melt(df_tot)
+data_melted$variable <- as.numeric(gsub("y", "", data_melted$variable))
+write.csv(data_melted, "data.melted.csv")
+
+#modifiquei a tabela manualmente, adicionando uma coluna "group"
+
+workingdir <- "/home/vivischuch/worm_beautiful/count_results/"
+# data_melted <- read.csv("data.melted.csv")
+# data_melted$group <- as.factor(data_melted$group)
+data_melted <- df_tot
+
+library(ggplot2)
+
+pdf(file = "Number_of_genes_for_year_for_disease.pdf")
+v <- ggplot(data=data_melted, aes(variable, value, group=disease)) +
+  ggtitle("Number of first neighbor genes")+
+  geom_line()+
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.x = element_blank(),
+    legend.position="left",
+    legend.background = element_rect(fill="transparent"),
+    legend.key = element_rect(colour = NA, fill = NA),
+    axis.text.x = element_text(angle=45,  hjust = 1, vjust = 1),
+    axis.line = element_line(size = 0.4, linetype = "solid"),
+    plot.title = element_text(hjust = 0.5)
+  )+
+  geom_point(aes(color=group)) +
+  geom_line(aes(color=group))+
+  xlab("Year")+
+  ylab("Genes")+
+  scale_color_manual(values=c("#517B58", "#FF8C00", "#4DBD33", "#BDA0CB", 
+                              "#00BFFF", "#E32636"))
+vv <- v + scale_y_continuous(breaks=seq(0,1500,100), position = "right")+ 
+  scale_x_continuous(breaks=seq(1988,2018,2))+
+  labs(colour = "Diseases")
+v
+dev.off()
+
+#+++++++++++++++
+#fim
+  
+  
+# #### DOCUMENT_COUNT
+
+rm(list = ls())
+stringsAsFactors=FALSE
+
+workingdir <- "/home/vivischuch/worm_beautiful/count/"
+setwd(workingdir)
+# this step is necessary to remove the duplications in the file by adding them together before merging
+# ! might overestimate when duplications mention the same articles !!
+# (we do not know yet if this occurs)
+
+#set the working directory and the information you are looking for
+workingdir <- "/home/vivischuch/pubmed_zika/pubmed_results/pubtator/evolution/doc_count/"
+setwd(workingdir)
+query <- "edges_drugs_12_10_filtered_doi_"
+#list <- 1999:2018
+#years <- c("1989", "1991", "1993", "1995", "1997", "1999", "2001", "2003", "2005", "2007", "2009", "2011", "2013", "2015", "2017", "2019")
+years <- 1990:2020
+format <- ".csv"
+folder <- ""
+
+print(paste(workingdir,query))
+
+#read each document
+#create variable for edges and clean others
+#save clean files in the folder
+for (year in years){
+  wdd <- read.csv(paste0(workingdir,folder, query, year, format), header = TRUE)
+  #wdd <- read.csv("ID_50perc_till2018.csv")
+  #remove edges supported with less than 50% confidence (in case prior filtering failed)
+  wdd <- wdd[wdd$Target.type == "DRUG",]
+  # wdd <- wdd[which(wdd[,"Confidence"] >= 50 | wdd[,"Confidence"] == -1),]
+  #remove edges that only have 1 doc
+  wdd <- wdd[which(wdd[,"Documents"] >= 1),]
+  
+  wdd2 <- wdd[, c("Source.type", "Source.Display.Name", 
+                  "Target.type","Target.Display.Name", "Confidence", "Documents")]
+  
+  
+  #other separators might produce problems if they are present in any
+  #of the columns selected in the mutate function
+  sep = "///"
+  wdd3 <- wdd2 %>% mutate(id = paste(Source.type,
+                                     sep = sep,
+                                     Target.type,
+                                     Source.Display.Name,
+                                     Target.Display.Name))
+  wdd4 <- wdd3[, c("id","Documents")]
+  colnames(wdd4) <- c("id", paste0("Documents|", year))
+  write.csv(wdd4,paste0(workingdir, folder,"clean_", query, year, format))
+}
+
+#merge the clean files
+clean_wdd <-read.csv(paste0(workingdir, folder, "clean_", query, years[1], format))
+clean_wdd <- clean_wdd[,-1]
+
+for (year in years[-1]){
+  wdd <- read.csv(paste0(workingdir, folder, "clean_", query, year, format))
+  wdd <- wdd[,-1]
+  
+  wddx <-  aggregate(wdd[paste0("Documents.", year)],
+                     by=wdd["id"],
+                     sum)
+  
+  clean_wdd <- merge(clean_wdd, wddx, by = "id", all = TRUE)
+  clean_wdd[is.na(clean_wdd)] <- 0
+}
+
+#remove intermediate files:
+
+for (year in years){
+  file.remove(paste0(workingdir,folder, "clean_", query, year, format))
+}
+
+#create document counts table
+library(tidyr)
+clean_wdd_expanded <- clean_wdd %>% separate(1, c("Source.type",
+                                                  "Target.type",
+                                                  "Source.Display.Name",
+                                                  "Target.Display.Name"),
+                                             sep =sep)
+
+# clean_wdd_expanded is the table with the document counts per year.
+#save the table to directory
+write.csv(clean_wdd_expanded, paste0(workingdir,folder, "document_counts_",query,".csv"))
+
+fields <- clean_wdd_expanded
+
+#########################################
+# this part of the  code was written a posteriori by hnakaya
+# for post processing of the document counts table
+#and preparation of nodes and edges for gephi
+#Thomaz Luscher Dias (tldias) edited some minor aspects up to line 97
+
+#(tldias)make Nodes table by selecting only unique node names from Source and Target columns
+#(tldias)in the fields (clean_wdd_expanded) tables
+sourceX <- fields[,c(1,3)] #tldias #sourceX <- fields[,1:3](hnakaya)
+targetX <- fields[,c(2,4)] #tldias #targetX <- fields[,2:4](hnakaya)
+colnames(sourceX) <- c("x","y")
+colnames(targetX) <- c("x","y")
+nodes <- rbind(sourceX,targetX)
+nodes <- nodes[!duplicated(nodes), ]
+nodes$name <- nodes[,2]
+colnames(nodes) <- c("Class","Id","Label")
+
+tax_ID <- fread("tax_ID_fornodes.csv")
+tax_ID <- as.data.frame(tax_ID)
+tax_ID$current_name_virus <- as.character(tax_ID$current_name_virus)
+nodes$current_name_virus <- nodes$Id
+nodes$current_name_virus <- as.character(nodes$current_name_virus)
+# annotations_taxID <- inner_join(edges, tax_ID, by = "species")
+nodes_final <- merge(nodes, tax_ID, by = "current_name_virus", all.x = TRUE)
+nodes_final1 <- distinct(nodes_final)
+head(nodes_final1)
+# nodes_final <- nodes_final[-1,]
+nodes_final1$current_name_virus <- NULL
+nodes_final1[is.na(nodes_final1)] <- ""
+head(nodes_final1)
+# 
+# 
+# nodes2 <- read.delim(file = "Nodes_drugs_degree_5_curada.csv", sep = '\t', header = TRUE)
+# colnames(nodes2)[1] <- "Id"
+# 
+# 
+# nodes1_final <- merge(nodes_final1, nodes2, by = "Id", all.x = TRUE)
+# 
+# 
+# # nodes1_final1 <- merge(nodes_final, nodes2, by = "ID", all.x = TRUE)
+# # nodes1_final1 <- distinct(nodes1_final1)
+# # nodes1_final1[is.na(nodes1_final1)] <- ""
+# 
+# 
+# nodes1_final[is.na(nodes1_final)] <- ""
+# # write_tsv(nodes1_final, "nodes_chemical_10_08_anotada_clinicaltrials.tsv")
+# 
+
+
+write.csv(nodes_final1, paste0(folder, "Nodes_document_counts_",query,".csv"),row.names=F)
+
+# write.csv(nodes1_final, paste0(folder, "Nodes_document_counts_drug_",query,".csv"),row.names=F)
+#write.csv(x = nodes,file = paste0(folder,"Nodes_document_counts_",query,".csv"),row.names=F)
+
+#########################################
+# this part of the  code was written a posteriori by Thomaz Luscher Dias
+# for removal of duplicated edges in the final Edges file
+
+#find edges that are duplicated in the Edges tables, remove all duplicates and maintain
+#only one occurance
+
+#(tldias)
+colnames(fields) <- c("Source.Class","Target.Class","Source","Target",paste("Doc|",years,sep=""))
+#(hnakaya)
+#colnames(fields) <- c("Source.Class","Source","Target.Class","Target",paste("Doc|",years,sep=""))
+
+#declare a character vector to receive each edge pair in original edges table
+edges=c()
+#parse edges table by index and make one edge for each adjacent pair of
+#source and target (field$Source[j]-field$Target[j])
+for (j in 1:length(fields$Source)){
+  edges[[j]]=paste(fields$Source[j],fields$Target[j],sep="-")
+}
+
+#get duplicated edges and make a list of the unique ids of these duped edges
+dups=c(edges[duplicated(edges)])
+dups=unique(dups)
+if(length(dups)==0){
+  write.csv(x = fields,file = paste0(folder,"Edges_document_counts_",query,".csv"),row.names=F)}
+if(length(dups)>0){
+  #eliminate duplicated edges to maintain only one occurance in the fields table
+  #declare character vector which will contain rownumbers to remove in fields table
+  row_to_remove = c()
+  #parse through dups oject to get each duplicated element position in the edges table
+  #obs: this will corresponde to the position of that source-target pair in the fields
+  #table too
+  for (index in 1:length(dups)){
+    #get each duplicated pair name using its index in the dups object - will not use
+    #"for(dup in dups)" for each duplicated edge index in the dups object will be used
+    dup = dups[index]
+    #get the index of that duplicated edge in the edges table
+    dups_pos = which(edges %in% dups[index])
+    #get the number of duplicated edges for each case
+    num_dups = length(which(edges %in% dups[index]))
+    #remove the two first occurances of that duplication in the field table
+    for (n in 2:num_dups-1){
+      pos_to_remove = dups_pos[n]
+      row_to_remove[[paste0("element",pos_to_remove)]] = pos_to_remove
+    }
+  }
+  #make new fields table containing only unique edges
+  fields=fields[-row_to_remove,]
+  write.csv(x = fields,file = paste0(folder,"Edges_document_counts_",query,".csv"),row.names=F)
+}
+
+# format <- ".csv"
+# folder <- ""
+# sep = "///"
+# 
+# library(data.table)
+# doc_count <- fread(paste0(workingdir, folder, "document_counts_", query, format), drop =1)
+# library(dplyr)
+# 
+# # get edges from the file
+# doc <- doc_count %>% mutate(from = paste0(Source.type, sep, Source.Display.Name)) %>%
+#   mutate(to = paste0(Target.type, sep , Target.Display.Name))
+# #remove 4 original 
+# doc <- doc[,-c(1,2,3,4)]
+# 
+# library(igraph)
+# 
+# #discretize the data into having( 2 or more articles) or not an edge
+# doc.count <- doc[,grep("Documents", colnames(doc))]
+# #set threshold for valid edges
+# # doc.count <- ifelse(doc.count >= 1, 1, 0)
+# doc.node.counts <- cbind(doc[, c("from","to")], doc.count)
+# 
+# #get network measures for each node
+# for (i in colnames(doc.count)){
+#   doc <- doc.node.counts %>% filter(get(i) == 1) %>% select( i, from, to)
+#   doc.graph<- graph_from_edgelist(as.matrix(doc[,c("from","to")]), directed = F)
+#   degree <- degree(doc.graph)
+#   strength <- strength(doc.graph)
+#   closeness <- closeness(doc.graph)
+#   betweenness <- betweenness(doc.graph)
+#   eigencent <- closeness(doc.graph)
+#   d <- cbind(degree, strength, closeness,  betweenness, eigencent)
+#   for (j in 1:length(colnames(d))){
+#     nome <- colnames(d)[j]
+#     colnames(d)[j] <- paste(nome, i, sep = ".")
+#   }
+#   write.csv(d, paste0(workingdir, folder, "graph_analysis_",query, i, format))
+# }
+# 
+# #merge the files
+# seed <- colnames(doc.count)[1]
+# graph.wdd <- read.csv(paste0(workingdir, folder, "graph_analysis_", query, seed , format))
+# for (i in colnames(doc.count)[-1]){
+#   graph.wdd1 <- read.csv(paste0(workingdir, folder, "graph_analysis_", query, i, format))
+#   graph.wdd <- merge(graph.wdd, graph.wdd1, by="X", all = T )
+#   
+# }
+# 
+# #remove intermediate files: 
+# 
+# for (i in colnames(doc.count)){
+#   file.remove(paste0(workingdir, folder, "graph_analysis_", query, i, format))
+# }
+# 
+# # substitute NA by 0
+# graph.wdd[is.na(graph.wdd)] <- 0
+# #write.csv(graph.wdd,paste0(workingdir, folder, "graph_analysis_", query, i, format))
+# 
+# #split first column in two
+# graph.wdd_expanded <- graph.wdd %>% separate(1, c("Class",
+#                                                   "Id"),
+#                                              sep ='///')
+# graph.wdd_expanded <- cbind(graph.wdd_expanded$Id,graph.wdd_expanded)
+# colnames(graph.wdd_expanded)[1] <- "Label"
+# 
+# write.csv(graph.wdd_expanded,paste0(workingdir, folder, "nodes_graph_", query, i, format),row.names=FALSE)
+# 
+# file.remove(paste0(workingdir,folder, "document_counts_",query,".csv"))
+
+
+
+
+
+# ############
+
+#library("XML")
+#library("methods")
+#library(readr)
+
+# Convert the input xml file to a data frame.
+#xmldataframe <- xmlToDataFrame("fulldatabase.xml")
+#print(xmldataframe)
+
+#data <- xmlParse("fulldatabase.xml")
+
+#xml_data <- xmlToList(data)
+

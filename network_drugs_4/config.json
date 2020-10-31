@@ -1,0 +1,53 @@
+{
+  "type": "network",
+  "version": "1.0",
+  "data": "data.json",
+  "logo": {
+    "file": "",
+    "link": "",
+    "text": "VSchuch"
+  },
+  "text": {
+    "more": "We select an initial list of 170 virus that cause diseases in humans, and retrieve all PMIDs related to them using Taxonomy ID tool from NCBI. Data were downloaded in october, 2020.\nPubtator Central and our own scripts were used to identify the potential relationships (edges) between chemicals and virus (nodes).\nWe excluded all types of reviews, letters and editorials articles and selected only associations supported by two or more documents. Biological concepts were annotated using MeSH descriptors. \nWe performed a modular analysis using the community detection algorithm implemented within Gephi software.\n\nVirus: 78 different species that cause disease in humans. Chemicals: 1179. Edges: 3091 associations supported by 2 or more documents. \nNode size represents degree. Nodes color: blue - chemicals, dark blue - chemicals in clinical trial for COVID-19, orange - no respiratory viruses and red - respiratory viruses.\nUndirected graph.\n",
+    "intro": "Pubtator Central and our own scripts were used to identify the potential relationships (edges) between chemicals and pathogenic virus (nodes).\nNode size represents degree.\nNodes color:\nblue - chemicals\ndark blue - chemicals in clinical trial for COVID-19\norange - no respiratory viruses\nred - respiratory viruses",
+    "title": "Virus x Chemicals Knowledge Network"
+  },
+  "legend": {
+    "edgeLabel": "Document Association",
+    "colorLabel": "Modularity",
+    "nodeLabel": "Virus and Chemicals"
+  },
+  "features": {
+    "search": true,
+    "groupSelectorAttribute": false,
+    "hoverBehavior": "default"
+  },
+  "informationPanel": {
+    "groupByEdgeDirection": false,
+    "imageAttribute": false
+  },
+  "sigma": {
+    "drawingProperties": {
+      "defaultEdgeType": "curve",
+      "defaultHoverLabelBGColor": "#002147",
+      "defaultLabelBGColor": "#ddd",
+      "activeFontStyle": "bold",
+      "defaultLabelColor": "#000",
+      "labelThreshold": 10,
+      "defaultLabelHoverColor": "#fff",
+      "fontStyle": "bold",
+      "hoverFontStyle": "bold",
+      "defaultLabelSize": 14
+    },
+    "graphProperties": {
+      "maxEdgeSize": 0.5,
+      "minEdgeSize": 0.2,
+      "minNodeSize": 1,
+      "maxNodeSize": 7
+    },
+    "mouseProperties": {
+      "maxRatio": 20,
+      "minRatio": 0.75
+    }
+  }
+}

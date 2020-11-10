@@ -8,14 +8,14 @@
     "text": "Viviane Schuch"
   },
   "text": {
-    "more": "We select an initial list of 170 virus that cause diseases in humans, and retrieve all PMIDs related to them using Taxonomy ID tool from NCBI. Data were downloaded in october, 2020. Pubtator Central and our own scripts were used to identify the potential relationships (edges) between chemicals and virus (nodes). We excluded all types of reviews, letters and editorials articles and selected only associations supported by two or more documents. Biological concepts were annotated using MeSH descriptors. We performed a modular analysis using the community detection algorithm implemented within Gephi software. Modules are denoted by color, and node size represents degree. Virus: 78 different species that cause disease in humans. Chemicals: 1517. Edges: 5514 associations supported by 2 or more documents. Node size represents degree. Modules are denoted by node color. Undirected graph",
+    "more": "We select an initial list of 170 virus that cause diseases in humans, and retrieve all PMIDs related to them using Taxonomy ID tool from NCBI. Data were downloaded in october, 2020. Pubtator Central and our own scripts were used to identify the potential relationships (edges) between chemicals and virus (nodes). We excluded all types of reviews, letters and editorials articles and selected only associations supported by two or more documents. Biological concepts were annotated using MeSH descriptors. We performed a modular analysis using the community detection algorithm implemented within Gephi software. Modules are denoted by color, and node size represents degree. Virus: 78 different species that cause disease in humans. Chemicals: 1222. Edges: 3245 associations supported by 2 or more documents. Node size represents degree. Modules are denoted by node color. Undirected graph.",
     "intro": "Pubtator Central and our own scripts were used to identify the potential relationships (edges) between chemicals and pathogenic virus (nodes). We performed a modular analysis using the community detection algorithm implemented within Gephi software. Modules are denoted by color, and node size represents degree.\n",
     "title": "Virus x Chemicals Knowledge Network"
   },
   "legend": {
-    "edgeLabel": "Document Association",
+    "edgeLabel": "Document Association ",
     "colorLabel": "Modularity",
-    "nodeLabel": "Virus and Chemicals"
+    "nodeLabel": " Virus and Chemicals"
   },
   "features": {
     "search": true,
